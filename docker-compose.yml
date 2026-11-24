@@ -1,0 +1,134 @@
+services:
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    ports:
+      # BIND_ADDR=127.0.0.1 in production (.env.production): only nginx on the
+      # host can reach the services; Docker publishes ports past ufw otherwise.
+      - "${BIND_ADDR:-0.0.0.0}:8008:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      # Hardcoded on purpose: these 4 are container-internal paths, always
+      # the same regardless of deployment. Everything else (KEYCLOAK_URL,
+      # CORS_ORIGINS, ...) comes from env_file below, so .env alone is
+      # enough to reconfigure a deployment; nothing to edit here.
+      - DEV_MODE=false
+      - POSITIONS_FILE=/app/data/template_positions.json
+      - TEMPLATES_DIR=/app/data/templates
+      - CERTIFS_DIR=/app/data/certifs
+      - DB_PATH=/app/data/certificates.db
+    env_file:
+      - .env
+    restart: unless-stopped
+    healthcheck:
+      # The slim image has no curl. 127.0.0.1, not localhost: extra_hosts
+      # below remaps "localhost" to the host.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    extra_hosts:
+      # KC_HOSTNAME=localhost below makes Keycloak self-report every URL
+      # (issuer, jwks_uri, token_endpoint) as http://localhost:8080/... so
+      # the browser can reach it. That means this container must also be
+      # able to resolve "localhost" to the actual Keycloak instance (not
+      # to itself) to fetch JWKS and validate the issuer. host-gateway
+      # routes it to the host, which forwards :8080 to the keycloak
+      # container. (A hardcoded container IP was here before; it happened
+      # to match Keycloak's IP by luck and would silently break on any
+      # network recreation; host-gateway is the portable equivalent.)
+      - "localhost:host-gateway"
+
+  front:
+    build:
+      context: ./front
+      dockerfile: Dockerfile
+    ports:
+      - "${BIND_ADDR:-0.0.0.0}:8501:8501"
+    # The image ships the code, but never the secrets: front/.dockerignore
+    # excludes secrets.toml, so it is mounted read-only from the host instead
+    # (st.login() fails with "Authentification non configurée" without it).
+    # For live reload of the code in development, add docker-compose.dev.yml
+    # (see README, "Démarrage local").
+    volumes:
+      - ./front/.streamlit/secrets.toml:/app/.streamlit/secrets.toml:ro
+    environment:
+      - DEV_MODE=false
+      - API_URL=http://api:8000
+    env_file:
+      - .env
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      # 127.0.0.1, not localhost: extra_hosts below remaps "localhost" to the host.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    extra_hosts:
+      # Same reason as api's extra_hosts above: Authlib (st.login()) does the
+      # OIDC token exchange server-side against Keycloak's self-reported
+      # (KC_HOSTNAME=localhost) endpoint URLs.
+      - "localhost:host-gateway"
+
+  keycloak:
+    # Pinned on purpose: "latest" can pull a new major version on any
+    # rebuild and break the realm or the hostname settings below.
+    image: keycloak/keycloak:26.8.2
+    # KC_START_MODE: "start-dev" locally (default), "start" in production
+    # (set in .env.production). start-dev skips production safety checks.
+    command: ["${KC_START_MODE:-start-dev}", "--import-realm"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+      KC_HOSTNAME: ${KC_HOSTNAME}
+      KC_HOSTNAME_STRICT: false
+      # TLS ends at the nginx reverse proxy: Keycloak speaks plain HTTP
+      # behind it and trusts its X-Forwarded-* headers to build https:// URLs.
+      KC_HTTP_ENABLED: true
+      KC_PROXY_HEADERS: xforwarded
+      KC_HEALTH_ENABLED: true
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+    healthcheck:
+      # The image has no curl: plain bash /dev/tcp against the management
+      # port (9000), which serves /health/ready when KC_HEALTH_ENABLED=true.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+    ports:
+      - "${BIND_ADDR:-0.0.0.0}:8080:8080"
+    volumes:
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+    depends_on:
+      keycloak-db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  keycloak-db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD}
+    volumes:
+      - keycloak-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+    restart: unless-stopped
+
+volumes:
+  keycloak-db-data:

@@ -1,0 +1,20 @@
+/*
+ * OpenCertif : thème personnalisé (optionnel)
+ *
+ * Ce fichier est chargé APRÈS style.css par load_css() (voir utils.py) et
+ * permet de personnaliser une instance sans toucher au design system de base.
+ *
+ * Pour changer la couleur d'accent (ex : IndabaX Togo en vert), redéfinissez
+ * simplement les variables suivantes : tout le reste du design system
+ * (boutons, badges, focus des champs, sidebar, etc.) s'adapte automatiquement
+ * puisqu'il consomme ces variables :
+ *
+ * :root {
+ *   --oc-accent: #1B5E3B;
+ *   --oc-accent-hover: #145230;
+ *   --oc-accent-light: #E8F5E9;
+ * }
+ *
+ * Pensez aussi à aligner front/.streamlit/config.toml (primaryColor) sur la
+ * même couleur, et à déposer un logo dans front/static/logo.png si besoin.
+ */

@@ -1,0 +1,23 @@
+# Secrets: never commit
+.env
+.env.production
+front/.streamlit/secrets.toml
+front/.streamlit/secrets.production.toml
+
+# Runtime data (templates/PDFs/DB are deployment-specific)
+data/certifs/
+data/certificates.db
+data/templates/*
+!data/templates/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# Editors / OS
+.DS_Store
+.vscode/
+.idea/

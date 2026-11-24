@@ -1,0 +1,81 @@
+{
+  "realm": "opencertif",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "editUsernameAllowed": false,
+  "bruteForceProtected": true,
+  "accessTokenLifespan": 1800,
+  "roles": {
+    "realm": [
+      {
+        "name": "certifs-admin",
+        "description": "Génération unitaire/batch, téléchargement PDF, éditeur de positions, historique complet."
+      },
+      {
+        "name": "certifs-viewer",
+        "description": "Lecture seule de l'historique des certificats."
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "opencertif-app",
+      "name": "OpenCertif",
+      "description": "Client confidentiel utilisé par le front Streamlit (Authorization Code flow).",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "CHANGE_ME_IN_PRODUCTION",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "authorizationServicesEnabled": false,
+      "redirectUris": [
+        "https://certifs.DOMAIN/*",
+        "http://localhost:8501/*",
+        "http://localhost:8501/oauth2callback"
+      ],
+      "webOrigins": [
+        "https://certifs.DOMAIN",
+        "http://localhost:8501"
+      ],
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "profile",
+        "roles",
+        "email"
+      ],
+      "optionalClientScopes": [
+        "address",
+        "phone",
+        "offline_access",
+        "microprofile-jwt"
+      ],
+      "protocolMappers": [
+        {
+          "name": "realm-roles-in-id-token",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "multivalued": "true",
+            "claim.name": "realm_access.roles",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": []
+}

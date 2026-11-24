@@ -1,0 +1,408 @@
+/* OpenCertif : Design System v1 (see docs/design_system.md) */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+/* ---------------------------------------------------------------- */
+/* 1. Variables                                                      */
+/* ---------------------------------------------------------------- */
+
+:root {
+  /* Fond */
+  --oc-bg-primary: #FFFFFF;
+  --oc-bg-secondary: #F8F9FA;
+  --oc-bg-card: #FFFFFF;
+
+  /* Texte */
+  --oc-text-primary: #1A1A2E;
+  --oc-text-secondary: #6B7280;
+  --oc-text-muted: #9CA3AF;
+
+  /* Accent : à remplacer par instance (voir custom_theme.css) */
+  --oc-accent: #7C3AED;
+  --oc-accent-hover: #6D28D9;
+  --oc-accent-light: #EDE9FE;
+
+  /* Statuts */
+  --oc-success: #10B981;
+  --oc-success-light: #D1FAE5;
+  --oc-error: #EF4444;
+  --oc-error-light: #FEE2E2;
+  --oc-warning: #F59E0B;
+  --oc-warning-light: #FEF3C7;
+
+  /* Bordures & ombres */
+  --oc-border: #E5E7EB;
+  --oc-border-radius: 12px;
+  --oc-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --oc-shadow-md: 0 4px 6px rgba(0, 0, 0, 0.07);
+  --oc-shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
+}
+
+/* ---------------------------------------------------------------- */
+/* 2. Overrides Streamlit                                            */
+/* ---------------------------------------------------------------- */
+
+.stApp {
+  background: var(--oc-bg-primary);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  color: var(--oc-text-primary);
+}
+
+.stApp, .stApp p, .stApp span, .stApp label, .stApp div {
+.stApp, .stApp p, .stApp span:not([data-testid="stIconMaterial"]), .stApp label, .stApp div {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* Restaure la police Material Symbols pour les icônes Streamlit */
+[data-testid="stIconMaterial"] {
+  font-family: 'Material Symbols Rounded' !important;
+}
+
+/* Boutons */
+.stButton > button {
+  background: var(--oc-accent);
+  color: #FFFFFF;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 20px;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: none;
+  transition: background-color 0.15s ease;
+}
+
+.stButton > button:hover {
+  background: var(--oc-accent-hover);
+  color: #FFFFFF;
+}
+
+.stButton > button:focus:not(:active) {
+  border: none;
+  box-shadow: 0 0 0 3px var(--oc-accent-light);
+}
+
+/* Ghost buttons (opt-in via key="oc-ghost-..."), used for pagination
+   and per-row actions so they don't compete visually with primary CTAs. */
+[class*="st-key-oc-ghost-"] button {
+  background: transparent;
+  color: var(--oc-text-secondary);
+  box-shadow: none;
+  padding: 6px 12px;
+}
+
+/* Danger buttons (opt-in via key="oc-danger-..."): destructive, hard-to-undo
+   actions (delete a template, delete selected rows) get a red treatment
+   instead of the default accent color as a "this can't be undone" cue. */
+[class*="st-key-oc-danger-"] button {
+  background: var(--oc-error);
+  color: #FFFFFF;
+}
+
+[class*="st-key-oc-danger-"] button:hover {
+  filter: brightness(0.9);
+  background: var(--oc-error);
+  color: #FFFFFF;
+}
+
+[class*="st-key-oc-ghost-"] button:hover {
+  background: var(--oc-bg-secondary);
+  color: var(--oc-text-primary);
+}
+
+/* Champs de formulaire */
+.stTextInput input,
+.stSelectbox select,
+.stNumberInput input,
+.stDateInput input,
+.stTextArea textarea {
+  border-radius: 8px;
+  border: 1px solid var(--oc-border);
+  padding: 10px 14px;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  color: var(--oc-text-primary);
+}
+
+.stTextInput input:focus,
+.stSelectbox select:focus,
+.stNumberInput input:focus,
+.stDateInput input:focus,
+.stTextArea textarea:focus {
+  border-color: var(--oc-accent);
+  box-shadow: 0 0 0 3px var(--oc-accent-light);
+  outline: none;
+}
+
+.stSlider [data-baseweb="slider"] [role="slider"] {
+  background-color: var(--oc-accent);
+}
+
+/* Sidebar */
+[data-testid="stSidebar"] {
+  background: var(--oc-bg-secondary);
+  border-right: none;
+}
+
+[data-testid="stSidebar"] > div {
+  border-right: none;
+}
+
+/* Onglets */
+.stTabs [data-baseweb="tab-list"] {
+  gap: 4px;
+  border-bottom: 1px solid var(--oc-border);
+}
+
+.stTabs [data-baseweb="tab"] {
+  height: 40px;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--oc-text-secondary);
+  background: transparent;
+  border-radius: 8px 8px 0 0;
+}
+
+.stTabs [aria-selected="true"] {
+  color: var(--oc-accent);
+  font-weight: 600;
+}
+
+.stTabs [data-baseweb="tab-highlight"] {
+  background-color: var(--oc-accent);
+}
+
+/* Tableaux */
+.stDataFrame {
+  border: 1px solid var(--oc-border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.stDataFrame [data-testid="stDataFrameResizable"] div[role="columnheader"] {
+  background: var(--oc-bg-secondary);
+  color: var(--oc-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.stDataFrame [role="row"]:hover [role="gridcell"] {
+  background: var(--oc-bg-secondary);
+}
+
+/* ---------------------------------------------------------------- */
+/* 3. Composants OpenCertif                                          */
+/* ---------------------------------------------------------------- */
+
+.oc-page-title {
+  font-size: 28px;
+  font-weight: 700;
+  margin-bottom: 24px;
+  color: var(--oc-text-primary);
+}
+
+.oc-card {
+  padding: 24px;
+  border-radius: 12px;
+  border: 1px solid var(--oc-border);
+  box-shadow: var(--oc-shadow-sm);
+  background: var(--oc-bg-card);
+  margin-bottom: 16px;
+}
+
+.oc-card-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--oc-text-primary);
+  margin: 0 0 16px 0;
+}
+
+/* Badges */
+.oc-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.oc-badge-success {
+  background: var(--oc-success-light);
+  color: var(--oc-success);
+}
+
+.oc-badge-error {
+  background: var(--oc-error-light);
+  color: var(--oc-error);
+}
+
+.oc-badge-warning {
+  background: var(--oc-warning-light);
+  color: var(--oc-warning);
+}
+
+/* Pastilles (tableau batch) */
+.oc-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.oc-dot-success { background: var(--oc-success); }
+.oc-dot-warning { background: var(--oc-warning); }
+.oc-dot-error { background: var(--oc-error); }
+
+/* Zone d'upload : st.container(key="oc-upload-zone") ; Streamlit préfixe
+   la classe du conteneur avec "st-key-" (voir components.upload_zone). */
+.st-key-oc-upload-zone {
+  border: 2px dashed var(--oc-border);
+  border-radius: 12px;
+  padding: 40px;
+  text-align: center;
+  background: var(--oc-bg-secondary);
+  transition: border-color 0.2s;
+}
+
+.st-key-oc-upload-zone:hover {
+  border-color: var(--oc-accent);
+}
+
+.st-key-oc-upload-zone [data-testid="stIconMaterial"] {
+  color: var(--oc-text-muted);
+  font-size: 40px;
+  margin-bottom: 12px;
+}
+
+.oc-upload-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--oc-text-primary);
+  margin: 0 0 4px 0;
+}
+
+.oc-upload-subtitle {
+  font-size: 13px;
+  color: var(--oc-text-muted);
+  margin: 0;
+}
+
+/* Fait passer le file_uploader Streamlit "dans" la zone d'upload OC :
+   la zone stylée sert de conteneur visuel autour du widget natif. */
+.st-key-oc-upload-zone + div [data-testid="stFileUploaderDropzone"] {
+  background: transparent;
+  border: none;
+}
+
+/* Table custom (historique) */
+.oc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.oc-table th {
+  background: var(--oc-bg-secondary);
+  color: var(--oc-text-secondary);
+  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  padding: 10px 14px;
+}
+
+.oc-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--oc-border);
+  color: var(--oc-text-primary);
+}
+
+.oc-table tr:hover td {
+  background: var(--oc-bg-secondary);
+}
+
+.oc-table-empty {
+  color: var(--oc-text-muted);
+  font-size: 14px;
+  padding: 24px 0;
+  text-align: center;
+}
+
+/* Sidebar OpenCertif */
+.oc-sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.oc-sidebar-brand img {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.oc-sidebar-brand-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--oc-text-primary);
+}
+
+.oc-sidebar-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--oc-text-muted);
+  letter-spacing: 0.04em;
+  margin: 8px 0 4px 4px;
+}
+
+/* st.container(key="oc-sidebar-user") : les 2 colonnes internes gèrent déjà
+   l'alignement horizontal icône/texte, ce conteneur ne fait que l'espacer. */
+.st-key-oc-sidebar-user {
+  padding: 10px 4px;
+}
+
+.st-key-oc-sidebar-user [data-testid="stIconMaterial"] {
+  color: var(--oc-text-secondary);
+}
+
+.oc-sidebar-user-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--oc-text-primary);
+  line-height: 1.3;
+}
+
+.oc-sidebar-user-role {
+  font-size: 12px;
+  color: var(--oc-text-muted);
+  line-height: 1.3;
+}
+
+/* Ligne de champ (label + valeur), utilisee dans les cartes resultat */
+.oc-field-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--oc-border);
+  font-size: 14px;
+}
+
+.oc-field-row:last-child {
+  border-bottom: none;
+}
+
+.oc-field-label {
+  color: var(--oc-text-secondary);
+}
+
+.oc-field-value {
+  color: var(--oc-text-primary);
+  font-weight: 500;
+}

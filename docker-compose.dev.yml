@@ -1,0 +1,9 @@
+# Development only: live reload of the front code, never on a server.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#
+# Deliberately not named docker-compose.override.yml: Compose loads that
+# file automatically, so it would silently end up in production too.
+services:
+  front:
+    volumes:
+      - ./front:/app

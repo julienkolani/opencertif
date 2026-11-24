@@ -1,0 +1,20 @@
+{
+  "presentation_2020": {
+    "template_file": "Certificat_de_presentation_2020.pdf",
+    "name_position": {
+      "x": 421.0,
+      "y": 298.0
+    },
+    "name_font": "Helvetica-Bold",
+    "name_max_size": 40,
+    "name_min_size": 18,
+    "name_max_width": 500.0,
+    "qr_position": {
+      "x": 398.0,
+      "y": 80.0
+    },
+    "qr_size": 79,
+    "pages": 2,
+    "name_page": 1
+  }
+}
