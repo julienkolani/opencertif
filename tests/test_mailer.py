@@ -324,3 +324,35 @@ def test_list_email_log_filters_and_paginates(settings):
     assert db.list_email_log(recipient="user1")[1] == 1
     page2, total = db.list_email_log(limit=2, offset=2)
     assert total == 5 and [e["recipient"] for e in page2] == ["user2@example.com", "user1@example.com"]
+
+
+def _insert_old_log(days_ago: int):
+    from datetime import datetime, timedelta, timezone
+
+    db.insert_email_log({
+        "sent_at": (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat(),
+        "recipient": f"old{days_ago}@example.com", "kind": "test", "status": "envoye",
+    })
+
+
+def test_email_log_kept_forever_by_default(monkeypatch, settings):
+    monkeypatch.setattr(mailer, "_last_log_purge", None)
+    _insert_old_log(3000)
+    mailer.record_email("new@example.com", "S", "test", "envoye")
+
+    assert db.list_email_log()[1] == 2
+
+
+def test_email_log_retention_purges_old_entries_once_a_day(monkeypatch, settings):
+    monkeypatch.setenv("EMAIL_LOG_RETENTION_DAYS", "30")
+    config_module.get_settings.cache_clear()
+    monkeypatch.setattr(mailer, "_last_log_purge", None)
+    _insert_old_log(40)
+    _insert_old_log(10)
+
+    mailer.record_email("new@example.com", "S", "test", "envoye")
+    assert sorted(e["recipient"] for e in db.list_email_log()[0]) == ["new@example.com", "old10@example.com"]
+
+    _insert_old_log(50)  # purge already ran today: kept until tomorrow's pass
+    mailer.record_email("new2@example.com", "S", "test", "envoye")
+    assert db.list_email_log()[1] == 4

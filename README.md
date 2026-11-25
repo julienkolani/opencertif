@@ -442,7 +442,9 @@ date, destinataire, sujet, certificat, auteur, erreur éventuelle et HTML
 exact envoyé. On la consulte dans l'onglet **Journal des envois** de la
 page Emails (filtres, aperçu de l'email, export CSV). C'est le seul
 historique des envois : l'envoi SMTP ne dépose aucune copie dans le dossier
-« Envoyés » de la boîte expéditrice.
+« Envoyés » de la boîte expéditrice. Il est conservé sans limite par défaut ;
+`EMAIL_LOG_RETENTION_DAYS=730` dans `.env` purge par exemple les entrées de
+plus de deux ans (au plus une fois par jour).
 
 ### 7. Sauvegardes
 

@@ -2,7 +2,6 @@ import csv
 import io
 import logging
 import smtplib
-import threading
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -17,6 +16,9 @@ from core.crypto import encrypt_secret
 from core.db import (
     EMAIL_LOG_KINDS,
     EMAIL_LOG_STATUSES,
+    create_send_job,
+    get_send_job as db_get_send_job,
+    update_send_job,
     get_certificates_for_email,
     get_email_log,
     list_email_log,
@@ -117,16 +119,23 @@ def test_config(payload: EmailTestRequest, user: dict = Depends(require_role("ce
     record_email(payload.to_email, subject, "test", "envoye", None, html_body, sent_by=_username(user))
     return {"ok": True, "message": "Connexion OK et email de test envoyé."}
 
-_send_jobs: dict[str, dict] = {}
-_send_jobs_lock = threading.Lock()
-
 def _do_send_emails(job_id: str, certs: list, base_url: str, sent_by: str | None = None) -> None:
-    """Tâche d'arrière-plan : envoie les emails et met à jour le job."""
+    """Tâche d'arrière-plan : envoie les emails et met à jour le job en base
+    (progression après chaque certificat, résultat à la fin)."""
+    try:
+        _send_all(job_id, certs, base_url, sent_by)
+    except Exception:
+        logger.exception("Envoi en masse %s interrompu par une erreur", job_id)
+        update_send_job(job_id, status="error")
+
+
+def _send_all(job_id: str, certs: list, base_url: str, sent_by: str | None) -> None:
     sent = skipped = 0
     errors = []
-    for cert in certs:
+    for processed, cert in enumerate(certs, start=1):
         if not cert.get("email"):
             skipped += 1
+            update_send_job(job_id, processed=processed)
             continue
         verify_url = f"{base_url}/verifier?code={cert['id']}" if base_url else ""
         success = send_certificate_email(
@@ -146,12 +155,17 @@ def _do_send_emails(job_id: str, certs: list, base_url: str, sent_by: str | None
             sent += 1
             logger.info("Email envoyé à %s (cert %s)", cert["email"], cert["id"])
         else:
-            errors.append({"cert_id": cert["id"], "email": cert["email"], "reason": "Échec SMTP"})
-    with _send_jobs_lock:
-        _send_jobs[job_id].update({
-            "status": "done",
-            "result": {"total": len(certs), "sent": sent, "skipped": skipped, "errors": errors},
-        })
+            errors.append({
+                "cert_id": cert["id"],
+                "email": cert["email"],
+                "reason": "Échec d'envoi (détail dans le journal des envois)",
+            })
+        update_send_job(job_id, processed=processed)
+    update_send_job(
+        job_id,
+        status="done",
+        result={"total": len(certs), "sent": sent, "skipped": skipped, "errors": errors},
+    )
 
 @router.post("/send")
 def send_emails(
@@ -171,8 +185,7 @@ def send_emails(
     )
     settings = get_settings()
     job_id = _sec.token_hex(8)
-    with _send_jobs_lock:
-        _send_jobs[job_id] = {"status": "running", "total": len(certs), "result": None}
+    create_send_job(job_id, len(certs), _username(user))
     background_tasks.add_task(_do_send_emails, job_id, certs, settings.BASE_URL, _username(user))
     return {"job_id": job_id, "total": len(certs), "status": "running"}
 
@@ -181,12 +194,18 @@ def get_send_job(
     job_id: str,
     user: dict = Depends(require_role("certifs-admin")),
 ) -> dict:
-    """Retourne l'état d'un job d'envoi d'emails."""
-    with _send_jobs_lock:
-        job = _send_jobs.get(job_id)
+    """État d'un envoi en masse : running, done, interrupted (API redémarrée
+    pendant l'envoi) ou error, avec la progression (processed / total)."""
+    job = db_get_send_job(job_id)
     if job is None:
         raise HTTPException(404, "Job d'envoi introuvable.")
-    return {"job_id": job_id, **job}
+    return {
+        "job_id": job_id,
+        "status": job["status"],
+        "total": job["total"],
+        "processed": job["processed"],
+        "result": job["result"],
+    }
 
 @router.get("/preview")
 def preview_email(user: dict = Depends(require_role("certifs-admin"))):

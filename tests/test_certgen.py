@@ -214,3 +214,31 @@ def test_merge_config_partial_position_override():
     assert merged["name_position"] == {"x": 999, "y": 200}
     assert merged["qr_size"] == 80
     assert base["name_position"] == {"x": 100, "y": 200}
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("DUPONT_Jean", "DUPONT_Jean"),
+        ("DUPONT_Jean Paul", "DUPONT_Jean_Paul"),
+        ("KOLANI_Jean/Paul", "KOLANI_Jean_Paul"),
+        ("../../ETC_passwd", "ETC_passwd"),
+        ("N'GUESSAN_Hélène", "N_GUESSAN_Hélène"),
+        ("///", "certificat"),
+    ],
+)
+def test_safe_filename_part(raw, expected):
+    assert certgen._safe_filename_part(raw) == expected
+
+
+def test_generate_certificate_with_slash_in_name_stays_in_certifs_dir(settings):
+    """Regression: "Jean/Paul" was used as-is in the filename, so the write
+    failed (missing "Jean" directory) and the row ended in error."""
+    output_path = Path(certgen.generate_certificate(
+        name="Kolani", first_name="Jean/Paul", event_name="Evt", event_date="2026-03-15",
+        cert_type="participation", cert_id="slash1", settings=settings,
+    ))
+
+    assert output_path.exists()
+    assert output_path.name == "slash1_KOLANI_Jean_Paul.pdf"
+    assert output_path.parent == Path(settings.CERTIFS_DIR) / "2026" / "participation"

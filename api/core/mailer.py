@@ -3,14 +3,15 @@ import logging
 import re
 import smtplib
 import ssl
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 
 from .crypto import decrypt_secret
-from .db import get_setting, insert_email_log
+from .config import get_settings
+from .db import get_setting, insert_email_log, purge_email_log
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +175,22 @@ def test_smtp_connection() -> tuple[bool, str]:
         return False, f"Échec de connexion : {exc}"
 
 
+_last_log_purge: datetime | None = None
+
+
+def _purge_old_email_log() -> None:
+    """Applies EMAIL_LOG_RETENTION_DAYS, at most once a day per process."""
+    global _last_log_purge
+    days = get_settings().EMAIL_LOG_RETENTION_DAYS
+    now = datetime.now(timezone.utc)
+    if days <= 0 or (_last_log_purge and now - _last_log_purge < timedelta(days=1)):
+        return
+    _last_log_purge = now
+    deleted = purge_email_log((now - timedelta(days=days)).isoformat())
+    if deleted:
+        logger.info("Journal des emails : %d entrée(s) de plus de %d jours supprimée(s).", deleted, days)
+
+
 def record_email(
     recipient: str,
     subject: str | None,
@@ -200,6 +217,7 @@ def record_email(
             "sent_by": sent_by,
             "html_body": html_body,
         })
+        _purge_old_email_log()
     except Exception:
         logger.exception("Impossible d'écrire le journal d'envoi pour %s", recipient)
 

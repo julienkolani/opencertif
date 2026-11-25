@@ -266,3 +266,47 @@ def test_log_filters_export_and_404(client, monkeypatch):
     assert "b@example.com" in text and "Erreur SMTP : boom" in text and "Sujet é" in text
 
     assert client.get("/api/email/log/999999").status_code == 404
+
+
+def test_send_job_is_persisted_with_progress(client, monkeypatch, insert_cert_with_email, tmp_path):
+    from core.db import get_send_job
+
+    pdf_path = tmp_path / "cert.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 fake")
+    insert_cert_with_email("job-1", email="a@example.com", pdf_path=str(pdf_path))
+    insert_cert_with_email("job-2", email="b@example.com", pdf_path=str(pdf_path), name="Autre")
+    _configure_smtp(client, monkeypatch)
+
+    job_id = client.post("/api/email/send", json={"only_unsent": True}).json()["job_id"]
+
+    poll = client.get(f"/api/email/send/{job_id}").json()
+    assert poll["status"] == "done" and poll["processed"] == 2 and poll["total"] == 2
+    assert poll["result"]["sent"] == 2
+    stored = get_send_job(job_id)  # read from the database, not from memory
+    assert stored["created_by"] and stored["result"]["sent"] == 2
+
+
+def test_running_job_becomes_interrupted_after_restart(client):
+    """Regression: jobs lived in memory, so after a restart the front polled
+    a 404 forever. A job left "running" is now marked "interrupted"."""
+    from core.db import create_send_job, init_db
+
+    create_send_job("cut-short", total=10, created_by="oc-admin")
+    init_db()  # what the API does at startup
+
+    poll = client.get("/api/email/send/cut-short").json()
+    assert poll["status"] == "interrupted" and poll["total"] == 10
+
+
+def test_send_job_crash_is_reported_as_error(client, monkeypatch, insert_cert_with_email):
+    import routers.email as email_router
+
+    insert_cert_with_email("job-crash", email="a@example.com")
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(email_router, "_send_all", explode)
+    job_id = client.post("/api/email/send", json={"only_unsent": True}).json()["job_id"]
+
+    assert client.get(f"/api/email/send/{job_id}").json()["status"] == "error"

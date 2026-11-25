@@ -1,5 +1,6 @@
 import io
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -128,6 +129,15 @@ def _build_writer_with_overlay(
     return writer, name_page_index
 
 
+def _safe_filename_part(text: str) -> str:
+    """Filename-safe version of a participant name (the PDF shows the real
+    one). Keeps letters, accented ones included, digits, '-' and '_'; any
+    other run of characters ("/", "..", spaces, quotes) becomes "_", so a
+    name like "Jean/Paul" can neither fail the write nor leave CERTIFS_DIR."""
+    cleaned = re.sub(r"[^\w-]+", "_", text).strip("_")
+    return cleaned[:100] or "certificat"
+
+
 def generate_certificate(
     name: str,
     first_name: str,
@@ -157,7 +167,7 @@ def generate_certificate(
     )
 
     event_year = event_date.split("-")[0]
-    safe_name = f"{name.upper()}_{first_name}".replace(" ", "_")
+    safe_name = _safe_filename_part(f"{name.upper()}_{first_name}")
     output_dir = Path(settings.CERTIFS_DIR) / event_year / cert_type
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{cert_id}_{safe_name}.pdf"

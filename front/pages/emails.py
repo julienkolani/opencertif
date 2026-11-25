@@ -163,17 +163,46 @@ with tab_send:
     job = st.session_state.get("oc_email_job")
     if job and job.get("status") == "running":
         import time
-        st.markdown(
-            badge("warning", f"Envoi en cours... ({job.get('total', 0)} email(s) en file)"),
-            unsafe_allow_html=True,
+        total = job.get("total", 0) or 0
+        processed = job.get("processed", 0) or 0
+        st.progress(
+            min(processed / total, 1.0) if total else 0.0,
+            text=f"Envoi en cours : {processed} / {total} certificat(s) traité(s)",
         )
         time.sleep(2)
         try:
             poll = api_request("GET", f"/api/email/send/{job['job_id']}", token=auth["token"])
             st.session_state["oc_email_job"] = poll.json()
-        except ApiError:
-            pass
+        except ApiError as exc:
+            # Never poll forever: an unknown job (404) or a persistent error
+            # ends the follow-up with a message instead of spinning.
+            if exc.status_code == 404:
+                st.session_state["oc_email_job"] = {**job, "status": "interrupted"}
+            else:
+                failures = job.get("_poll_failures", 0) + 1
+                st.session_state["oc_email_job"] = {
+                    **job, "_poll_failures": failures, "status": "error" if failures >= 5 else "running",
+                }
         st.rerun()
+
+    if job and job.get("status") in ("interrupted", "error"):
+        card_start("Rapport d'envoi")
+        if job["status"] == "interrupted":
+            message = (
+                f"Envoi interrompu ({job.get('processed', 0)} / {job.get('total', 0)} traité(s)) : "
+                "le serveur a redémarré pendant l'envoi."
+            )
+        else:
+            message = "L'envoi s'est arrêté sur une erreur, ou son suivi est impossible."
+        st.markdown(badge("error", message), unsafe_allow_html=True)
+        st.caption(
+            "Les emails déjà partis sont marqués comme envoyés et visibles dans le Journal des envois. "
+            "Relancez avec « Seulement les non encore envoyés » pour terminer sans doublon."
+        )
+        if st.button("Nouvel envoi", icon=":material/refresh:", key="oc-email-job-reset-failed"):
+            del st.session_state["oc_email_job"]
+            st.rerun()
+        card_end()
 
     if job and job.get("status") == "done":
         result = job.get("result", {})

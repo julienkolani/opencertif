@@ -53,13 +53,21 @@ def verify_token(token: str, settings: Settings) -> dict[str, Any]:
     public_key = get_keycloak_public_key(settings)
     issuer = f"{settings.KEYCLOAK_URL}/realms/{settings.KEYCLOAK_REALM}"
 
-    return jwt.decode(
+    claims = jwt.decode(
         token,
         public_key,
         algorithms=["RS256"],
         issuer=issuer,
+        # Keycloak access tokens carry aud="account" (or nothing), not the
+        # client id, so the audience is checked through azp below instead.
         options={"verify_aud": False},
     )
+    # azp ("authorized party") is the client the token was issued to. Without
+    # this check, a token obtained by any other client of the realm (e.g. the
+    # Keycloak account console) would be accepted by the API.
+    if settings.KEYCLOAK_CLIENT_ID and claims.get("azp") != settings.KEYCLOAK_CLIENT_ID:
+        raise JWTError(f"Token issued to another client: {claims.get('azp')!r}")
+    return claims
 
 
 def get_user_roles(token_claims: dict[str, Any]) -> list[str]:

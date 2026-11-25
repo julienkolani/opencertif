@@ -5,6 +5,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
+from jose import JWTError
 from jose import jwt as jose_jwt
 
 from core import auth
@@ -41,7 +42,7 @@ def settings(monkeypatch):
     config_module.get_settings.cache_clear()
 
 
-def _make_token(private_pem, settings, roles, exp_delta=timedelta(minutes=5), issuer=None):
+def _make_token(private_pem, settings, roles, exp_delta=timedelta(minutes=5), issuer=None, azp=None):
     now = datetime.now(timezone.utc)
     claims = {
         "sub": "user-123",
@@ -50,6 +51,7 @@ def _make_token(private_pem, settings, roles, exp_delta=timedelta(minutes=5), is
         "iat": now,
         "exp": now + exp_delta,
         "realm_access": {"roles": roles},
+        "azp": azp or settings.KEYCLOAK_CLIENT_ID,
     }
     return jose_jwt.encode(claims, private_pem, algorithm="RS256")
 
@@ -167,3 +169,14 @@ def test_require_role_correct_role_returns_200(monkeypatch, settings, rsa_keypai
 
     assert response.status_code == 200
     assert response.json()["sub"] == "user-123"
+
+
+def test_verify_token_issued_to_another_client_raises(monkeypatch, settings, rsa_keypair):
+    """A valid, correctly signed token from another client of the realm (azp)
+    must not open the API."""
+    private_pem, public_pem = rsa_keypair
+    monkeypatch.setattr(auth, "get_keycloak_public_key", lambda s: public_pem)
+    token = _make_token(private_pem, settings, roles=["certifs-admin"], azp="account-console")
+
+    with pytest.raises(JWTError):
+        auth.verify_token(token, settings)

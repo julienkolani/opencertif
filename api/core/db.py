@@ -48,6 +48,20 @@ CREATE TABLE IF NOT EXISTS email_log (
 )
 """
 
+# Mass email sends run in the background: their progress is kept here, not
+# in memory, so it survives an API restart (the job is then "interrupted").
+CREATE_TABLE_SEND_JOBS_SQL = """
+CREATE TABLE IF NOT EXISTS send_jobs (
+    id          TEXT PRIMARY KEY,
+    status      TEXT NOT NULL,
+    total       INTEGER NOT NULL,
+    processed   INTEGER NOT NULL DEFAULT 0,
+    result      TEXT,
+    created_at  TEXT NOT NULL,
+    created_by  TEXT
+)
+"""
+
 EMAIL_LOG_KINDS = ("unitaire", "batch", "masse", "test")
 EMAIL_LOG_STATUSES = ("envoye", "echec")
 
@@ -90,6 +104,9 @@ def init_db() -> None:
         conn.execute(CREATE_INDEX_SQL)
         conn.execute(CREATE_TABLE_EMAIL_LOG_SQL)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_email_log_sent_at ON email_log(sent_at)")
+        conn.execute(CREATE_TABLE_SEND_JOBS_SQL)
+        # A job still "running" at startup was cut short by a restart.
+        conn.execute("UPDATE send_jobs SET status = 'interrupted' WHERE status = 'running'")
         
         # Migration : colonne email
         try:
@@ -350,3 +367,57 @@ def get_email_log(log_id: int) -> dict[str, Any] | None:
     with get_connection() as conn:
         row = conn.execute("SELECT * FROM email_log WHERE id = ?", (log_id,)).fetchone()
         return dict(row) if row else None
+
+
+def purge_email_log(older_than: str) -> int:
+    """Deletes journal entries sent before `older_than` (ISO timestamp).
+    Returns the number of deleted rows."""
+    with get_connection() as conn:
+        return conn.execute("DELETE FROM email_log WHERE sent_at < ?", (older_than,)).rowcount
+
+
+def create_send_job(job_id: str, total: int, created_by: str | None) -> None:
+    from datetime import datetime, timezone
+
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO send_jobs (id, status, total, created_at, created_by) VALUES (?, 'running', ?, ?, ?)",
+            (job_id, total, datetime.now(timezone.utc).isoformat(), created_by),
+        )
+
+
+def update_send_job(
+    job_id: str,
+    processed: int | None = None,
+    status: str | None = None,
+    result: dict[str, Any] | None = None,
+) -> None:
+    import json
+
+    sets: list[str] = []
+    params: list[Any] = []
+    if processed is not None:
+        sets.append("processed = ?")
+        params.append(processed)
+    if status is not None:
+        sets.append("status = ?")
+        params.append(status)
+    if result is not None:
+        sets.append("result = ?")
+        params.append(json.dumps(result, ensure_ascii=False))
+    if not sets:
+        return
+    with get_connection() as conn:
+        conn.execute(f"UPDATE send_jobs SET {', '.join(sets)} WHERE id = ?", (*params, job_id))
+
+
+def get_send_job(job_id: str) -> dict[str, Any] | None:
+    import json
+
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM send_jobs WHERE id = ?", (job_id,)).fetchone()
+    if row is None:
+        return None
+    job = dict(row)
+    job["result"] = json.loads(job["result"]) if job["result"] else None
+    return job
