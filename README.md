@@ -1,5 +1,7 @@
 # OpenCertif
 
+[![CI](https://github.com/julienkolani/opencertif/actions/workflows/ci.yml/badge.svg)](https://github.com/julienkolani/opencertif/actions/workflows/ci.yml)
+
 Application web open source de génération et vérification de certificats
 (participation, organisation, présentation...) pour des événements
 (conférences, formations, hackathons...). Génération unitaire ou en batch
@@ -283,8 +285,16 @@ Dans les commandes, remplacez `exemple.fr` par votre domaine.
 
     ```bash
     deploy/backup.sh                      # sauvegarde avant mise à jour
-    git pull && docker compose up -d --build
+    git pull                              # compose, scripts, documentation
+    docker compose pull api front         # images publiées par la CI
+    docker compose up -d
     ```
+
+    Les images `ghcr.io/julienkolani/opencertif-api` et `-front` sont
+    construites par la CI à chaque push sur `main`, une fois les tests
+    passés (voir « Intégration continue »). `OPENCERTIF_TAG=sha-xxxxxxx` dans
+    le `.env` épingle une version précise, pour revenir en arrière.
+    `docker compose up -d --build` reste possible pour construire sur place.
 
 En cas de problème au démarrage ou à la connexion, commencez par
 `docker compose logs keycloak` et `docker compose logs front`. Si l'API ou
@@ -629,6 +639,27 @@ opencertif/
 ```
 
 ---
+
+## Intégration continue
+
+`.github/workflows/ci.yml`, sur GitHub Actions :
+
+- **à chaque push et pull request** : installation des dépendances
+  (Python 3.12, comme les images), `pytest`, contrôle de syntaxe du front ;
+- **à chaque push sur `main` ou tag `v*`**, et seulement si les tests
+  passent : construction et publication des images `api` et `front` sur
+  GitHub Container Registry, avec les tags `latest`, `sha-<commit>` et,
+  pour un tag `v1.2.3`, `1.2.3` et `1.2`.
+
+Rien n'est déployé automatiquement : le serveur récupère les images avec
+`docker compose pull` (voir « Mises à jour ultérieures »).
+
+Les paquets GHCR sont **privés** à leur création, même pour un dépôt
+public. Pour que le serveur puisse les télécharger sans identifiants,
+rendez-les publics une fois : GitHub → profil → *Packages* →
+`opencertif-api` (puis `opencertif-front`) → *Package settings* →
+*Change visibility* → *Public*. Sinon, connectez le serveur avec
+`docker login ghcr.io` et un token ayant le droit `read:packages`.
 
 ## Développement / tests
 

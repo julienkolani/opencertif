@@ -1,5 +1,10 @@
 services:
   api:
+    # Published by the CI on every push to main (.github/workflows/ci.yml).
+    # On a server: `docker compose pull api front && docker compose up -d`
+    # (no build). Locally, `--build` still builds from ./api and ./front.
+    # OPENCERTIF_TAG pins a version (sha-xxxxxxx, 1.2.3); default: latest.
+    image: ${OPENCERTIF_IMAGE_PREFIX:-ghcr.io/julienkolani}/opencertif-api:${OPENCERTIF_TAG:-latest}
     build:
       context: ./api
       dockerfile: Dockerfile
@@ -43,6 +48,7 @@ services:
       - "localhost:host-gateway"
 
   front:
+    image: ${OPENCERTIF_IMAGE_PREFIX:-ghcr.io/julienkolani}/opencertif-front:${OPENCERTIF_TAG:-latest}
     build:
       context: ./front
       dockerfile: Dockerfile
