@@ -1,4 +1,6 @@
+import html
 import logging
+import re
 import smtplib
 import ssl
 from email.mime.application import MIMEApplication
@@ -11,16 +13,121 @@ from .db import get_setting
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_EMAIL_TEMPLATE = """<html>
-<body>
-  <p>Bonjour {prenom} {nom},</p>
-  <p>Félicitations ! Votre certificat pour <strong>{evenement}</strong>
-  (le {date}) est disponible en pièce jointe de cet e-mail.</p>
-  <p>Vous pouvez vérifier l'authenticité de votre certificat à l'adresse :<br>
-  <a href="{url_verification}">{url_verification}</a></p>
-  <p>Cordialement,<br>L'équipe organisatrice</p>
+# Built for email clients, not browsers: table layout, inline styles only
+# (Gmail and Outlook drop <style> blocks or parts of them), a "bulletproof"
+# button made of a coloured table cell, and the raw link repeated below it
+# for clients that block buttons. Max width 560px so it reads well on phones.
+DEFAULT_EMAIL_TEMPLATE = """<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Votre certificat : {evenement}</title>
+</head>
+<body style="margin:0; padding:0; background-color:#F3F4F6;">
+<div style="display:none; max-height:0; overflow:hidden; opacity:0;">Votre certificat pour {evenement} est disponible en pièce jointe.</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#F3F4F6" style="background-color:#F3F4F6;">
+  <tr>
+    <td align="center" style="padding:32px 16px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px; background-color:#FFFFFF; border:1px solid #E5E7EB; border-radius:12px; font-family:Arial, Helvetica, sans-serif; color:#1A1A2E;">
+        <tr>
+          <td style="height:6px; background-color:#7C3AED; border-radius:12px 12px 0 0; font-size:0; line-height:0;">&nbsp;</td>
+        </tr>
+        <tr>
+          <td style="padding:32px 32px 8px 32px;">
+            <p style="margin:0 0 4px 0; font-size:12px; letter-spacing:1px; text-transform:uppercase; color:#7C3AED; font-weight:bold;">Certificat</p>
+            <h1 style="margin:0; font-size:22px; line-height:1.3; color:#1A1A2E;">{evenement}</h1>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:16px 32px 0 32px; font-size:15px; line-height:1.6;">
+            <p style="margin:0 0 16px 0;">Bonjour {prenom} {nom},</p>
+            <p style="margin:0 0 16px 0;">Félicitations&nbsp;! Vous trouverez en pièce jointe votre certificat pour <strong>{evenement}</strong>, en date du {date}.</p>
+            <p style="margin:0 0 24px 0;">Chaque certificat porte un QR code unique&nbsp;: toute personne qui le reçoit (employeur, établissement...) peut en vérifier l'authenticité en ligne.</p>
+          </td>
+        </tr>
+        <tr>
+          <td align="center" style="padding:0 32px 24px 32px;">
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td bgcolor="#7C3AED" style="background-color:#7C3AED; border-radius:8px;">
+                  <a href="{url_verification}" target="_blank" style="display:inline-block; padding:12px 28px; font-family:Arial, Helvetica, sans-serif; font-size:15px; font-weight:bold; color:#FFFFFF; text-decoration:none; border-radius:8px;">Vérifier mon certificat</a>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:0 32px 24px 32px; font-size:13px; line-height:1.5; color:#6B7280;">
+            Si le bouton ne fonctionne pas, copiez ce lien dans votre navigateur&nbsp;:<br>
+            <a href="{url_verification}" target="_blank" style="color:#7C3AED; word-break:break-all;">{url_verification}</a>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:0 32px 32px 32px; font-size:15px; line-height:1.6;">
+            <p style="margin:0;">Cordialement,<br>L'équipe organisatrice</p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:16px 32px; border-top:1px solid #E5E7EB; font-size:12px; line-height:1.5; color:#9CA3AF;">
+            Cet e-mail a été envoyé automatiquement. Pour toute question ou erreur sur votre certificat, répondez simplement à ce message.
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
 </body>
 </html>"""
+
+DEFAULT_EMAIL_SUBJECT = "Votre certificat : {evenement}"
+
+# Only these placeholders are substituted. Anything else between braces
+# (CSS in a <style> block, inline JSON...) is left untouched, so a custom
+# template can never fail to render. str.format() used to raise on such
+# braces, and the code then silently sent the default template instead.
+TEMPLATE_VARIABLES = ("prenom", "nom", "evenement", "date", "url_verification")
+_PLACEHOLDER_RE = re.compile(r"\{(" + "|".join(TEMPLATE_VARIABLES) + r")\}")
+
+# Sample values used by the preview and by the test email.
+SAMPLE_VALUES = {
+    "prenom": "Jean",
+    "nom": "Dupont",
+    "evenement": "Formation Python",
+    "date": "01/01/2026",
+    "url_verification": "https://exemple.com/verifier?code=12345",
+}
+
+
+def render_template(template: str, values: dict[str, str], escape_html: bool = True) -> str:
+    """Replaces {prenom}, {nom}, {evenement}, {date} and {url_verification}.
+
+    Values are HTML-escaped by default (a participant name coming from an
+    Excel file must not inject markup into the email body); pass
+    escape_html=False for the plain-text subject line.
+    """
+    def replace(match: re.Match) -> str:
+        value = str(values.get(match.group(1), ""))
+        return html.escape(value) if escape_html else value
+
+    return _PLACEHOLDER_RE.sub(replace, template)
+
+
+def build_email_content(
+    values: dict[str, str],
+    template: str | None = None,
+    subject_template: str | None = None,
+) -> tuple[str, str]:
+    """Returns (subject, html_body).
+
+    template / subject_template default to the saved settings, then to the
+    built-in defaults. The preview and the test email pass the values being
+    edited in the UI, so they can be checked before saving.
+    """
+    template = template or get_setting("smtp_email_template") or DEFAULT_EMAIL_TEMPLATE
+    subject_template = subject_template or get_setting("smtp_email_subject") or DEFAULT_EMAIL_SUBJECT
+    subject = render_template(subject_template, values, escape_html=False)
+    return subject, render_template(template, values)
 
 
 def _get_smtp_params() -> dict:
@@ -81,29 +188,16 @@ def send_certificate_email(
         logger.warning("SMTP non configuré, email non envoyé.")
         return False
 
-    template = get_setting("smtp_email_template") or DEFAULT_EMAIL_TEMPLATE
-    try:
-        html_body = template.format(
-            prenom=first_name,
-            nom=name,
-            evenement=event_name,
-            date=event_date,
-            url_verification=verify_url,
-        )
-    except (KeyError, ValueError) as exc:
-        logger.error("Template email invalide (%s), fallback sur le template par défaut.", exc)
-        html_body = DEFAULT_EMAIL_TEMPLATE.format(
-            prenom=first_name,
-            nom=name,
-            evenement=event_name,
-            date=event_date,
-            url_verification=verify_url,
-        )
-
-    subject = get_setting("smtp_email_subject") or f"Votre certificat : {event_name}"
+    subject, html_body = build_email_content({
+        "prenom": first_name,
+        "nom": name,
+        "evenement": event_name,
+        "date": event_date,
+        "url_verification": verify_url,
+    })
 
     message = MIMEMultipart("mixed")
-    message["Subject"] = subject.format(evenement=event_name)
+    message["Subject"] = subject
     message["From"] = params["from_addr"]
     message["To"] = to_email
     message.attach(MIMEText(html_body, "html"))

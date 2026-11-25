@@ -51,8 +51,12 @@ with tab_config:
     email_template = st.text_area("Template HTML de l'email", value=config.get("email_template", ""), height=300)
     st.caption(
         "Laissez vide pour utiliser le template par défaut. Variables disponibles : "
-        "`{prenom}`, `{nom}`, `{evenement}`, `{date}`, `{url_verification}`"
+        "`{prenom}`, `{nom}`, `{evenement}`, `{date}`, `{url_verification}`. "
+        "L'aperçu et l'email de test utilisent le contenu affiché ci-dessus, "
+        "même non sauvegardé."
     )
+    # Sent with the preview and the test email so unsaved edits can be checked.
+    draft_template = {"email_subject": email_subject, "email_template": email_template}
 
     col_save, col_test = st.columns(2)
     
@@ -78,7 +82,7 @@ with tab_config:
 
     if col_test.button("Aperçu du template", width="stretch"):
         try:
-            resp = api_request("GET", "/api/email/preview", token=auth["token"])
+            resp = api_request("POST", "/api/email/preview", json=draft_template, token=auth["token"])
             data = resp.json()
             st.markdown(f"**Sujet :** {data.get('subject', '')}")
             components.html(data.get('html', ''), height=400, scrolling=True)
@@ -90,7 +94,7 @@ with tab_config:
         if st.button("Envoyer le test"):
             if test_email:
                 try:
-                    resp = api_request("POST", "/api/email/test", json={"to_email": test_email}, token=auth["token"])
+                    resp = api_request("POST", "/api/email/test", json={"to_email": test_email, **draft_template}, token=auth["token"])
                     res_data = resp.json()
                     if res_data.get("ok"):
                         st.markdown(badge("success", "Email de test envoyé !"), unsafe_allow_html=True)

@@ -218,3 +218,37 @@ def test_test_smtp_connection_success(monkeypatch, settings):
 
     assert ok is True
     assert "smtp.example.com" in message
+
+
+CSS_TEMPLATE = (
+    "<html><head><style>p { margin: 0; } .btn { color: #fff; }</style></head>"
+    "<body><p>Salut {prenom} {nom}</p><a href=\"{url_verification}\">{evenement}</a></body></html>"
+)
+
+
+def test_custom_template_with_css_braces_is_used_not_default(monkeypatch, settings, sample_pdf):
+    """Regression: str.format() raised on CSS braces and silently fell back
+    to DEFAULT_EMAIL_TEMPLATE, whatever template the admin had saved."""
+    db.set_setting("smtp_email_template", CSS_TEMPLATE)
+    _FakeSMTP.instances.clear()
+    monkeypatch.setattr(mailer.smtplib, "SMTP", _FakeSMTP)
+
+    assert mailer.send_certificate_email(
+        to_email="julien@example.com", name="Kolani", first_name="Julien",
+        event_name="IndabaX Togo 2026", event_date="2026-03-15",
+        pdf_path=sample_pdf, verify_url="https://certifs.example.com/verifier?code=abc123",
+    ) is True
+
+    parsed = message_from_string(_FakeSMTP.instances[0].sent[2])
+    html_part = next(p for p in parsed.walk() if p.get_content_type() == "text/html")
+    html_body = html_part.get_payload(decode=True).decode("utf-8")
+    assert "Salut Julien Kolani" in html_body
+    assert "p { margin: 0; }" in html_body
+    assert "Félicitations" not in html_body  # default template text
+
+
+def test_render_template_escapes_values_but_not_subject():
+    values = {"prenom": "<b>Jo</b>", "nom": "O'Neil & Co", "evenement": "A & B"}
+    assert mailer.render_template("{prenom} {nom}", values) == "&lt;b&gt;Jo&lt;/b&gt; O&#x27;Neil &amp; Co"
+    assert mailer.render_template("Votre certificat : {evenement}", values, escape_html=False) == "Votre certificat : A & B"
+    assert mailer.render_template("{inconnu} {{x}}", values) == "{inconnu} {{x}}"

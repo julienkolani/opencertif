@@ -107,6 +107,67 @@ def test_preview_returns_subject_and_html(client):
     assert "subject" in body
 
 
+def _configure_smtp(client, monkeypatch, template="", subject="Votre certificat : {evenement}"):
+    client.post(
+        "/api/email/config",
+        json={
+            "host": "smtp.example.com", "port": 587, "user": "", "password": "",
+            "from_addr": "noreply@example.com", "security": "starttls",
+            "email_subject": subject, "email_template": template,
+        },
+    )
+    import core.mailer as mailer_module
+
+    _FakeSMTP.instances.clear()
+    monkeypatch.setattr(mailer_module.smtplib, "SMTP", _FakeSMTP)
+
+
+def _sent_html_and_subject():
+    from email import message_from_string
+    from email.header import decode_header, make_header
+
+    sent = next(i.sent for i in _FakeSMTP.instances if i.sent)
+    parsed = message_from_string(sent[2])
+    html_part = next(p for p in parsed.walk() if p.get_content_type() == "text/html")
+    return html_part.get_payload(decode=True).decode("utf-8"), str(make_header(decode_header(parsed["Subject"])))
+
+
+def test_test_email_uses_saved_template(client, monkeypatch):
+    """Regression: the test email used to be a hardcoded plain-text message."""
+    _configure_smtp(client, monkeypatch, template="<style>p { color: red; }</style><p>Coucou {prenom}</p>")
+
+    body = client.post("/api/email/test", json={"to_email": "doc@example.com"}).json()
+
+    assert body["ok"] is True, body
+    html, subject = _sent_html_and_subject()
+    assert "Coucou Jean" in html and "p { color: red; }" in html
+    assert subject == "[Test] Votre certificat : Formation Python"
+
+
+def test_test_email_uses_unsaved_draft_over_saved_template(client, monkeypatch):
+    _configure_smtp(client, monkeypatch, template="<p>Ancien {prenom}</p>")
+
+    client.post("/api/email/test", json={
+        "to_email": "doc@example.com",
+        "email_template": "<p>Brouillon {nom}</p>",
+        "email_subject": "Attestation {evenement}",
+    })
+
+    html, subject = _sent_html_and_subject()
+    assert "Brouillon Dupont" in html and "Ancien" not in html
+    assert subject == "[Test] Attestation Formation Python"
+
+
+def test_preview_post_renders_draft_with_css_braces(client):
+    response = client.post("/api/email/preview", json={
+        "email_template": "<style>.x { margin: 0 }</style><p>{prenom} {evenement}</p>",
+    })
+
+    assert response.status_code == 200
+    assert "<p>Jean Formation Python</p>" in response.json()["html"]
+    assert ".x { margin: 0 }" in response.json()["html"]
+
+
 def test_send_emails_returns_job_id_and_completes(client, monkeypatch, insert_cert_with_email, tmp_path):
     pdf_path = tmp_path / "cert.pdf"
     pdf_path.write_bytes(b"%PDF-1.4 fake")

@@ -11,8 +11,15 @@ from pydantic import BaseModel
 from core.auth import require_role
 from core.config import get_settings, get_smtp_config_dict
 from core.crypto import encrypt_secret
-from core.db import get_certificates_for_email, get_setting, mark_email_sent, set_setting
-from core.mailer import DEFAULT_EMAIL_TEMPLATE, _build_smtp_connection, _get_smtp_params, send_certificate_email, test_smtp_connection
+from core.db import get_certificates_for_email, mark_email_sent, set_setting
+from core.mailer import (
+    SAMPLE_VALUES,
+    _build_smtp_connection,
+    _get_smtp_params,
+    build_email_content,
+    send_certificate_email,
+    test_smtp_connection,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +36,14 @@ class SmtpConfigRequest(BaseModel):
     email_subject: str = "Votre certificat : {evenement}"
     email_template: str = ""
 
-class EmailTestRequest(BaseModel):
+class TemplateOverride(BaseModel):
+    """Template being edited in the UI, not saved yet. Empty means: use the
+    saved settings, then the built-in default."""
+    email_subject: str | None = None
+    email_template: str | None = None
+
+
+class EmailTestRequest(TemplateOverride):
     to_email: str
 
 class EmailSendRequest(BaseModel):
@@ -68,8 +82,13 @@ def test_config(payload: EmailTestRequest, user: dict = Depends(require_role("ce
     try:
         from email.mime.text import MIMEText
         params = _get_smtp_params()
-        msg = MIMEText("Ceci est un email de test provenant d'OpenCertif.")
-        msg["Subject"] = "Test de configuration SMTP OpenCertif"
+        # Same rendering as a real certificate email (sample participant, no
+        # PDF attached), so the test shows what recipients will receive.
+        subject, html_body = build_email_content(
+            SAMPLE_VALUES, payload.email_template, payload.email_subject
+        )
+        msg = MIMEText(html_body, "html", "utf-8")
+        msg["Subject"] = f"[Test] {subject}"
         msg["From"] = params["from_addr"]
         msg["To"] = payload.to_email
         with _build_smtp_connection(params) as server:
@@ -148,27 +167,13 @@ def get_send_job(
 
 @router.get("/preview")
 def preview_email(user: dict = Depends(require_role("certifs-admin"))):
-    template = get_setting("smtp_email_template") or DEFAULT_EMAIL_TEMPLATE
-    subject_template = get_setting("smtp_email_subject") or "Votre certificat : {evenement}"
-    
-    try:
-        html = template.format(
-            prenom="Jean",
-            nom="Dupont",
-            evenement="Formation Python",
-            date="01/01/2026",
-            url_verification="https://exemple.com/verifier?code=12345"
-        )
-    except (KeyError, ValueError) as exc:
-        logger.error("Template email invalide (%s), fallback sur le template par défaut.", exc)
-        html = DEFAULT_EMAIL_TEMPLATE.format(
-            prenom="Jean",
-            nom="Dupont",
-            evenement="Formation Python",
-            date="01/01/2026",
-            url_verification="https://exemple.com/verifier?code=12345"
-        )
-        
-    subject = subject_template.format(evenement="Formation Python")
-    
+    """Preview of the saved template."""
+    subject, html = build_email_content(SAMPLE_VALUES)
+    return {"subject": subject, "html": html}
+
+
+@router.post("/preview")
+def preview_email_draft(payload: TemplateOverride, user: dict = Depends(require_role("certifs-admin"))):
+    """Preview of the template being edited (falls back to the saved one)."""
+    subject, html = build_email_content(SAMPLE_VALUES, payload.email_template, payload.email_subject)
     return {"subject": subject, "html": html}
