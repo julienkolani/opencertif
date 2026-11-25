@@ -6,7 +6,8 @@ front/.streamlit/secrets.production.toml
 
 # Runtime data (templates/PDFs/DB are deployment-specific)
 data/certifs/
-data/certificates.db
+data/certificates.db*
+backups/
 data/templates/*
 !data/templates/.gitkeep
 

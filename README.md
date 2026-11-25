@@ -276,12 +276,13 @@ Dans les commandes, remplacez `exemple.fr` par votre domaine.
       **échouer** : les services ne sont joignables qu'à travers nginx.
 13. **Emails** : page **Emails** → *Configuration SMTP*, puis « Tester
     l'envoi » (détail : étape 6 de la section suivante).
-14. **Sauvegardes** : un cron qui archive `data/` et la base Keycloak
-    (`docker exec opencertif-keycloak-db-1 pg_dump -U keycloak keycloak`),
-    avec une copie hors du serveur (détail : étape 7).
+14. **Sauvegardes** : lancez `deploy/backup.sh` une première fois, puis
+    planifiez-le chaque nuit avec cron et copiez les sauvegardes hors du
+    serveur (détail : étape 7).
 15. **Mises à jour ultérieures** :
 
     ```bash
+    deploy/backup.sh                      # sauvegarde avant mise à jour
     git pull && docker compose up -d --build
     ```
 
@@ -448,17 +449,37 @@ historique des envois : l'envoi SMTP ne dépose aucune copie dans le dossier
 Toutes les données persistantes vivent dans `data/` (bind-mount décrit
 dans "Structure du projet" plus bas) : la base SQLite
 (`data/certificates.db`), les PDF générés (`data/certifs/`) et les
-templates (`data/templates/`). Rien de tout cela n'est répliqué par
-défaut : une sauvegarde régulière (cron + copie hors du serveur) est
-indispensable avant toute mise en ligne réelle, par exemple :
+templates (`data/templates/`). Les utilisateurs et rôles vivent dans la
+base Postgres de Keycloak (volume Docker `keycloak-db-data`). Rien de tout
+cela n'est répliqué par défaut.
+
+`deploy/backup.sh` sauvegarde les trois, dans un dossier horodaté sous
+`backups/` (exclu de git), et supprime les sauvegardes de plus de 14 jours
+(`KEEP_DAYS` pour changer) :
 
 ```bash
-tar czf opencertif-backup-$(date +%F).tar.gz data/
+deploy/backup.sh                 # stack démarrée
+# Planification quotidienne à 3 h (crontab -e) :
+0 3 * * * /chemin/vers/opencertif/deploy/backup.sh >> /var/log/opencertif-backup.log 2>&1
 ```
 
-La base Postgres de Keycloak (volume Docker `keycloak-db-data`) mérite la
-même attention si vous ne voulez pas reperdre utilisateurs et rôles en cas
-de panne disque (`docker exec opencertif-keycloak-db-1 pg_dump -U keycloak keycloak`).
+**Ne copiez pas `data/certificates.db` avec `cp` ou `tar` pendant que
+l'API tourne.** La base est en mode WAL (lectures non bloquées pendant les
+écritures) : une partie des données récentes vit dans les fichiers
+`certificates.db-wal` et `-shm`, et une copie brute peut être incomplète ou
+corrompue. Le script passe par l'API de sauvegarde de SQLite, cohérente
+même pendant des écritures, et vérifie l'intégrité de la copie.
+
+Copiez ensuite `backups/` hors du serveur (`rsync`, `rclone`...) : une
+sauvegarde sur le même disque ne protège pas d'une panne de ce disque.
+
+Pour restaurer, la stack arrêtée (`docker compose down`) : remettez
+`certificates.db` dans `data/` (en supprimant `certificates.db-wal` et
+`-shm`), décompressez `data-files.tar.gz` à la racine du projet, puis
+rechargez Keycloak avec
+`zcat keycloak.sql.gz | docker compose exec -T keycloak-db psql -U keycloak keycloak`
+sur une base vide (`docker compose up -d keycloak-db` après
+`docker volume rm opencertif_keycloak-db-data`).
 
 ### 8. Checklist avant mise en ligne
 
@@ -484,8 +505,8 @@ de panne disque (`docker exec opencertif-keycloak-db-1 pg_dump -U keycloak keycl
 - [ ] Au moins un vrai template PDF déposé (`data/templates/`) et
       configuré (`data/template_positions.json`)
 - [ ] SMTP configuré et testé depuis la page Emails
-- [ ] Sauvegarde automatisée de `data/` et de la base Postgres Keycloak en
-      place
+- [ ] `deploy/backup.sh` testé et planifié (cron), avec une copie des
+      sauvegardes hors du serveur
 
 ---
 
@@ -590,7 +611,8 @@ opencertif/
 │   ├── certificates.db             # SQLite
 │   └── template_positions.json     # positions des éléments par type
 ├── deploy/
-│   └── nginx.example.conf          # reverse proxy + commentaires Let's Encrypt
+│   ├── nginx.example.conf          # reverse proxy + commentaires Let's Encrypt
+│   └── backup.sh                   # sauvegarde SQLite + fichiers + Keycloak (cron)
 ├── docs/
 │   ├── cahier_des_charges.md       # spécification complète
 │   └── design_system.md            # design system du front

@@ -64,7 +64,10 @@ class DuplicateCertificateError(Exception):
 @contextmanager
 def get_connection() -> Iterator[sqlite3.Connection]:
     settings = get_settings()
-    conn = sqlite3.connect(settings.DB_PATH)
+    # timeout: a writer waits up to 30 s for another one to finish instead of
+    # failing after the 5 s default with "database is locked" (e.g. a batch
+    # generation while a mass email send updates email_sent_at/email_log).
+    conn = sqlite3.connect(settings.DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     try:
         yield conn
@@ -77,6 +80,11 @@ def init_db() -> None:
     settings = get_settings()
     Path(settings.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     with get_connection() as conn:
+        # WAL: readers no longer block on a writer (public verification stays
+        # responsive during a batch). Persistent: stored in the database file.
+        # Side files certificates.db-wal / -shm appear next to it, so copying
+        # the .db file alone is NOT a valid backup: use deploy/backup.sh.
+        conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(CREATE_TABLE_SQL)
         conn.execute(CREATE_TABLE_SETTINGS_SQL)
         conn.execute(CREATE_INDEX_SQL)

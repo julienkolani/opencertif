@@ -114,3 +114,16 @@ def test_list_certificates_filters_and_pagination(temp_db):
     results, total = db.list_certificates(filters={}, page=2, per_page=2)
     assert total == 3
     assert len(results) == 1
+
+
+def test_init_db_enables_wal_journal_mode(temp_db):
+    """WAL keeps reads (public verification) working during writes; it is
+    stored in the database file, so it must be set by init_db()."""
+    import sqlite3
+
+    from core.config import get_settings
+
+    db.init_db()
+    conn = sqlite3.connect(get_settings().DB_PATH)
+    assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    conn.close()
