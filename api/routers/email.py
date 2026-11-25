@@ -1,7 +1,6 @@
 import csv
 import io
 import logging
-import smtplib
 from datetime import datetime, timezone
 from typing import Any, Literal
 
