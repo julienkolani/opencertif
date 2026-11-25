@@ -226,3 +226,32 @@ def test_delete_template_keeps_shared_pdf_file(client, app_env):
 
     assert response.status_code == 200
     assert (Path(app_env.TEMPLATES_DIR) / "Certificat_participation.pdf").exists()
+
+
+def _valid_config(template_file: str) -> dict:
+    return {
+        "template_file": template_file,
+        "name_position": {"x": 1, "y": 1}, "name_font": "Helvetica-Bold",
+        "name_max_size": 20, "name_min_size": 10, "name_max_width": 100,
+        "qr_position": {"x": 1, "y": 1}, "qr_size": 50, "pages": 1, "name_page": 1,
+    }
+
+
+def test_update_type_rejects_template_file_outside_templates_dir(client, app_env):
+    """Regression: a template_file such as "../x" was stored, then read to
+    render PDFs and deleted along with the template, outside TEMPLATES_DIR."""
+    from pathlib import Path
+
+    outside = Path(app_env.TEMPLATES_DIR).parent / "precieux.pdf"
+    outside.write_bytes(b"%PDF-1.4")
+
+    for bad in ("../precieux.pdf", str(outside), "sub/x.pdf"):
+        response = client.put("/api/templates/participation", json=_valid_config(bad))
+        assert response.status_code == 400, bad
+    assert outside.exists()
+
+
+def test_update_type_rejects_unsafe_type_id_and_missing_file(client):
+    assert client.put("/api/templates/../evil", json=_valid_config("Certificat_participation.pdf")).status_code in (400, 404)
+    assert client.put("/api/templates/bad id", json=_valid_config("Certificat_participation.pdf")).status_code == 400
+    assert client.put("/api/templates/participation", json=_valid_config("absent.pdf")).status_code == 400

@@ -13,6 +13,10 @@ load_dotenv()
 
 _FRONT_DIR = Path(__file__).resolve().parent
 
+# Batch generation with emails costs ~1 to 2 s per recipient (one SMTP
+# connection each): 30 s only covers a few dozen rows.
+BATCH_TIMEOUT = 15 * 60
+
 
 def get_api_url() -> str:
     return os.getenv("API_URL", "http://localhost:8000").rstrip("/")
@@ -35,8 +39,14 @@ class ApiError(Exception):
         self.status_code = status_code
 
 
-def api_request(method: str, endpoint: str, token: str | None = None, **kwargs: Any) -> requests.Response:
+def api_request(
+    method: str, endpoint: str, token: str | None = None, timeout: float = 30, **kwargs: Any
+) -> requests.Response:
     """Thin wrapper around `requests` targeting the OpenCertif API.
+
+    timeout (seconds) defaults to 30; long server-side jobs pass more (see
+    BATCH_TIMEOUT), otherwise the front reports a failure while the API is
+    still generating, and the admin may resubmit the batch.
 
     Raises ApiError (with a French, user-facing message) on connection
     failure or a non-2xx response instead of letting callers deal with
@@ -48,7 +58,7 @@ def api_request(method: str, endpoint: str, token: str | None = None, **kwargs: 
         headers["Authorization"] = f"Bearer {token}"
 
     try:
-        response = requests.request(method, url, headers=headers, timeout=30, **kwargs)
+        response = requests.request(method, url, headers=headers, timeout=timeout, **kwargs)
     except requests.exceptions.RequestException as exc:
         raise ApiError(f"Impossible de contacter l'API OpenCertif : {exc}") from exc
 

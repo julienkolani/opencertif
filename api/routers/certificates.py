@@ -15,7 +15,13 @@ from pydantic import BaseModel
 from core.auth import require_role
 from core.certgen import generate_certificate, get_available_types
 from core.config import Settings, get_settings
-from core.db import DuplicateCertificateError, check_duplicate, get_certificate_by_id, insert_certificate
+from core.db import (
+    DuplicateCertificateError,
+    check_duplicate,
+    get_certificate_by_id,
+    insert_certificate,
+    mark_email_sent,
+)
 from core.mailer import send_certificate_email
 from core.utils import normalize_event_date, sha256_of_file
 
@@ -63,6 +69,30 @@ class BatchRowsRequest(BaseModel):
 
 def _current_username(user: dict[str, Any]) -> str | None:
     return user.get("preferred_username") or user.get("email") or user.get("sub")
+
+
+def _send_and_mark(cert: dict[str, Any], settings: Settings, kind: str, user: dict[str, Any]) -> bool:
+    """Emails an already-saved certificate, then records email_sent_at.
+
+    Callers must insert the certificate first: the email contains a
+    verification link that has to resolve as soon as it is received.
+    """
+    verify_url = f"{settings.BASE_URL}/verifier?code={cert['id']}" if settings.BASE_URL else ""
+    sent = send_certificate_email(
+        to_email=cert["email"],
+        name=cert["name"],
+        first_name=cert["first_name"],
+        event_name=cert["event_name"],
+        event_date=cert["event_date"],
+        pdf_path=cert["pdf_path"],
+        verify_url=verify_url,
+        cert_id=cert["id"],
+        kind=kind,
+        sent_by=_current_username(user),
+    )
+    if sent:
+        mark_email_sent(cert["id"], datetime.now(timezone.utc).isoformat())
+    return sent
 
 
 def _generate_from_rows(
@@ -135,24 +165,8 @@ def _generate_from_rows(
             errors.append({"row": row_index, "error": f"Erreur de génération : {exc}"})
             continue
 
-        email_sent_at = None
-        if send_email and email:
-            verify_url = f"{settings.BASE_URL}/verifier?code={cert_id}" if settings.BASE_URL else ""
-            if send_certificate_email(
-                to_email=email,
-                name=name,
-                first_name=first_name,
-                event_name=event_name,
-                event_date=event_date,
-                pdf_path=pdf_path,
-                verify_url=verify_url,
-                cert_id=cert_id,
-                kind="batch",
-                sent_by=_current_username(user),
-            ):
-                email_sent_at = datetime.now(timezone.utc).isoformat()
-                emails_sent += 1
-
+        # Saved BEFORE emailing: the email carries a verification link, which
+        # must never point to a certificate that failed to be recorded.
         cert = {
             "id": cert_id,
             "name": name,
@@ -165,7 +179,7 @@ def _generate_from_rows(
             "pdf_path": pdf_path,
             "pdf_checksum": sha256_of_file(pdf_path),
             "email": email,
-            "email_sent_at": email_sent_at,
+            "email_sent_at": None,
         }
 
         try:
@@ -177,6 +191,9 @@ def _generate_from_rows(
 
         generated += 1
         generated_pdf_paths.append(pdf_path)
+
+        if send_email and email and _send_and_mark(cert, settings, "batch", user):
+            emails_sent += 1
 
     zip_url = None
     if generated_pdf_paths:
@@ -238,23 +255,6 @@ def generate_certificate_endpoint(
         raise HTTPException(400, f"Erreur lors de la génération du certificat : {exc}") from exc
 
     email = payload.email.strip() or None
-    email_sent_at = None
-    if payload.send_email and email:
-        verify_url = f"{settings.BASE_URL}/verifier?code={cert_id}" if settings.BASE_URL else ""
-        if send_certificate_email(
-            to_email=email,
-            name=payload.name,
-            first_name=payload.first_name,
-            event_name=payload.event_name,
-            event_date=event_date,
-            pdf_path=pdf_path,
-            verify_url=verify_url,
-            cert_id=cert_id,
-            kind="unitaire",
-            sent_by=_current_username(user),
-        ):
-            email_sent_at = datetime.now(timezone.utc).isoformat()
-
     cert = {
         "id": cert_id,
         "name": payload.name,
@@ -267,7 +267,7 @@ def generate_certificate_endpoint(
         "pdf_path": pdf_path,
         "pdf_checksum": sha256_of_file(pdf_path),
         "email": email,
-        "email_sent_at": email_sent_at,
+        "email_sent_at": None,
     }
 
     try:
@@ -276,11 +276,14 @@ def generate_certificate_endpoint(
         Path(pdf_path).unlink(missing_ok=True)
         raise HTTPException(409, "Un certificat existe déjà pour cette personne et cet événement.") from exc
 
+    # Only once the certificate is saved (see _send_and_mark).
+    email_sent = bool(payload.send_email and email and _send_and_mark(cert, settings, "unitaire", user))
+
     return CertificateGenerateResponse(
         id=cert_id,
         pdf_url=f"/api/certificates/{cert_id}/pdf",
         qr_content=f"{settings.BASE_URL}/verifier?code={cert_id}",
-        email_sent=email_sent_at is not None,
+        email_sent=email_sent,
     )
 
 

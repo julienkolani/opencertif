@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from components import badge, card_end, card_start, field_row, page_title, upload_zone
-from utils import ApiError, api_request, load_css, require_roles
+from utils import BATCH_TIMEOUT, ApiError, api_request, load_css, require_roles
 
 load_css()
 auth = require_roles(["certifs-admin"])
@@ -421,6 +421,7 @@ def _run_batch_generation(rows_df: pd.DataFrame, send_email: bool) -> None:
             "POST",
             "/api/certificates/batch-rows",
             token=auth["token"],
+            timeout=BATCH_TIMEOUT,
             json={"rows": _rows_to_payload(rows_df), "send_email": send_email},
         )
         progress.progress(100, text="Terminé.")

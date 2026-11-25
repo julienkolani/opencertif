@@ -494,3 +494,48 @@ def test_batch_zip_invalid_batch_id_format_returns_400(client):
     response = client.get("/api/certificates/batch/does-not-exist/zip")
 
     assert response.status_code == 400
+
+
+def _assert_saved_before_send(monkeypatch):
+    """Patches the mailer so each email checks its certificate is already in
+    the database: the email's verification link must resolve on arrival."""
+    import routers.certificates as certificates_module
+    from core.db import get_certificate_by_id
+
+    seen: list[str] = []
+
+    def fake_send_email(**kwargs):
+        assert get_certificate_by_id(kwargs["cert_id"]) is not None, "email sent before the certificate was saved"
+        seen.append(kwargs["cert_id"])
+        return True
+
+    monkeypatch.setattr(certificates_module, "send_certificate_email", fake_send_email)
+    return seen
+
+
+def test_generate_saves_certificate_before_emailing(client, monkeypatch):
+    from core.db import get_certificate_by_id
+
+    seen = _assert_saved_before_send(monkeypatch)
+    body = client.post("/api/certificates/generate", json={
+        "name": "Kolani", "first_name": "Julien", "event_name": "Ordre", "event_date": "2026-03-15",
+        "cert_type": "participation", "email": "julien@example.com", "send_email": True,
+    }).json()
+
+    assert seen == [body["id"]] and body["email_sent"] is True
+    assert get_certificate_by_id(body["id"])["email_sent_at"] is not None
+
+
+def test_batch_rows_save_certificates_before_emailing(client, monkeypatch):
+    from core.db import get_certificate_by_id
+
+    seen = _assert_saved_before_send(monkeypatch)
+    body = client.post("/api/certificates/batch-rows", json={"send_email": True, "rows": [
+        {"name": "A", "first_name": "Un", "event_name": "Ordre B", "event_date": "2026-03-15",
+         "cert_type": "participation", "email": "a@example.com"},
+        {"name": "B", "first_name": "Deux", "event_name": "Ordre B", "event_date": "2026-03-15",
+         "cert_type": "participation", "email": ""},
+    ]}).json()
+
+    assert body["generated"] == 2 and body["emails_sent"] == 1 and len(seen) == 1
+    assert get_certificate_by_id(seen[0])["email_sent_at"] is not None

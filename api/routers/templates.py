@@ -16,6 +16,17 @@ router = APIRouter()
 _SAFE_CERT_TYPE_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
+def _template_path(settings: Settings, filename: str) -> Path:
+    """Resolves a template filename inside TEMPLATES_DIR, refusing anything
+    that would point elsewhere ("../x.pdf", "/etc/x", "sub/x.pdf"): the
+    result is read to render certificates and deleted with the template."""
+    base = Path(settings.TEMPLATES_DIR).resolve()
+    path = (base / filename).resolve()
+    if not filename or Path(filename).name != filename or path.parent != base:
+        raise HTTPException(400, f"Nom de fichier de template invalide : '{filename}'.")
+    return path
+
+
 class PositionXY(BaseModel):
     x: float
     y: float
@@ -96,7 +107,7 @@ def delete_template(
     if filename:
         is_used = any(t.get("template_file") == filename for t in positions.values())
         if not is_used:
-            file_path = Path(settings.TEMPLATES_DIR) / filename
+            file_path = _template_path(settings, filename)
             if file_path.exists():
                 os.remove(file_path)
                 
@@ -129,6 +140,10 @@ def update_type(
     settings: Settings = Depends(get_settings),
     user: dict[str, Any] = Depends(require_role("certifs-admin")),
 ) -> dict[str, Any]:
+    if not _SAFE_CERT_TYPE_RE.fullmatch(cert_type):
+        raise HTTPException(400, "L'identifiant ne doit contenir que lettres, chiffres, '-' et '_'.")
+    if not _template_path(settings, payload.template_file).is_file():
+        raise HTTPException(400, f"Fichier de template introuvable : '{payload.template_file}'.")
     positions = load_template_positions(settings.POSITIONS_FILE)
     positions[cert_type] = payload.model_dump()
     save_template_positions(settings.POSITIONS_FILE, positions)
