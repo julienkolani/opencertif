@@ -146,6 +146,9 @@ def _generate_from_rows(
                 event_date=event_date,
                 pdf_path=pdf_path,
                 verify_url=verify_url,
+                cert_id=cert_id,
+                kind="batch",
+                sent_by=_current_username(user),
             ):
                 email_sent_at = datetime.now(timezone.utc).isoformat()
                 emails_sent += 1
@@ -246,6 +249,9 @@ def generate_certificate_endpoint(
             event_date=event_date,
             pdf_path=pdf_path,
             verify_url=verify_url,
+            cert_id=cert_id,
+            kind="unitaire",
+            sent_by=_current_username(user),
         ):
             email_sent_at = datetime.now(timezone.utc).isoformat()
 

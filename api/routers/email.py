@@ -1,22 +1,34 @@
+import csv
+import io
 import logging
 import smtplib
 import threading
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from core.auth import require_role
 from core.config import get_settings, get_smtp_config_dict
 from core.crypto import encrypt_secret
-from core.db import get_certificates_for_email, mark_email_sent, set_setting
+from core.db import (
+    EMAIL_LOG_KINDS,
+    EMAIL_LOG_STATUSES,
+    get_certificates_for_email,
+    get_email_log,
+    list_email_log,
+    mark_email_sent,
+    set_setting,
+)
 from core.mailer import (
     SAMPLE_VALUES,
     _build_smtp_connection,
     _get_smtp_params,
     build_email_content,
+    record_email,
     send_certificate_email,
     test_smtp_connection,
 )
@@ -24,6 +36,10 @@ from core.mailer import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _username(user: dict[str, Any]) -> str | None:
+    return user.get("preferred_username") or user.get("email") or user.get("sub")
 
 
 class SmtpConfigRequest(BaseModel):
@@ -88,19 +104,23 @@ def test_config(payload: EmailTestRequest, user: dict = Depends(require_role("ce
             SAMPLE_VALUES, payload.email_template, payload.email_subject
         )
         msg = MIMEText(html_body, "html", "utf-8")
-        msg["Subject"] = f"[Test] {subject}"
+        subject = f"[Test] {subject}"
+        msg["Subject"] = subject
         msg["From"] = params["from_addr"]
         msg["To"] = payload.to_email
         with _build_smtp_connection(params) as server:
             server.sendmail(params["from_addr"], [payload.to_email], msg.as_string())
-        return {"ok": True, "message": "Connexion OK et email de test envoyé."}
     except Exception as exc:
+        record_email(payload.to_email, subject, "test", "echec", f"Erreur SMTP : {exc}",
+                     html_body, sent_by=_username(user))
         return {"ok": False, "message": f"Connexion OK mais échec de l'envoi du test : {exc}"}
+    record_email(payload.to_email, subject, "test", "envoye", None, html_body, sent_by=_username(user))
+    return {"ok": True, "message": "Connexion OK et email de test envoyé."}
 
 _send_jobs: dict[str, dict] = {}
 _send_jobs_lock = threading.Lock()
 
-def _do_send_emails(job_id: str, certs: list, base_url: str) -> None:
+def _do_send_emails(job_id: str, certs: list, base_url: str, sent_by: str | None = None) -> None:
     """Tâche d'arrière-plan : envoie les emails et met à jour le job."""
     sent = skipped = 0
     errors = []
@@ -117,6 +137,9 @@ def _do_send_emails(job_id: str, certs: list, base_url: str) -> None:
             event_date=cert["event_date"],
             pdf_path=cert["pdf_path"],
             verify_url=verify_url,
+            cert_id=cert["id"],
+            kind="masse",
+            sent_by=sent_by,
         )
         if success:
             mark_email_sent(cert["id"], datetime.now(timezone.utc).isoformat())
@@ -150,7 +173,7 @@ def send_emails(
     job_id = _sec.token_hex(8)
     with _send_jobs_lock:
         _send_jobs[job_id] = {"status": "running", "total": len(certs), "result": None}
-    background_tasks.add_task(_do_send_emails, job_id, certs, settings.BASE_URL)
+    background_tasks.add_task(_do_send_emails, job_id, certs, settings.BASE_URL, _username(user))
     return {"job_id": job_id, "total": len(certs), "status": "running"}
 
 @router.get("/send/{job_id}")
@@ -177,3 +200,55 @@ def preview_email_draft(payload: TemplateOverride, user: dict = Depends(require_
     """Preview of the template being edited (falls back to the saved one)."""
     subject, html = build_email_content(SAMPLE_VALUES, payload.email_template, payload.email_subject)
     return {"subject": subject, "html": html}
+
+
+# --- Journal des envois ----------------------------------------------------
+
+def _log_filters(
+    recipient: str | None = None,
+    event_name: str | None = None,
+    status: Literal[EMAIL_LOG_STATUSES] | None = None,  # type: ignore[valid-type]
+    kind: Literal[EMAIL_LOG_KINDS] | None = None,  # type: ignore[valid-type]
+) -> dict[str, str | None]:
+    return {"recipient": recipient, "event_name": event_name, "status": status, "kind": kind}
+
+
+@router.get("/log")
+def get_email_log_page(
+    filters: dict = Depends(_log_filters),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=500),
+    user: dict = Depends(require_role("certifs-admin")),
+) -> dict:
+    """Every send attempt, newest first (without the HTML body)."""
+    items, total = list_email_log(**filters, limit=page_size, offset=(page - 1) * page_size)
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+
+@router.get("/log/export.csv")
+def export_email_log(
+    filters: dict = Depends(_log_filters),
+    user: dict = Depends(require_role("certifs-admin")),
+) -> Response:
+    items, _total = list_email_log(**filters, limit=None)
+    columns = ["sent_at", "recipient", "subject", "event_name", "cert_id", "kind", "status", "error", "sent_by"]
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=columns, extrasaction="ignore", delimiter=";")
+    writer.writeheader()
+    writer.writerows(items)
+    # UTF-8 BOM so Excel opens accents correctly.
+    return Response(
+        content="\ufeff" + buffer.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="journal-emails.csv"'},
+    )
+
+
+@router.get("/log/{log_id}")
+def get_email_log_entry(log_id: int, user: dict = Depends(require_role("certifs-admin"))) -> dict:
+    """One entry, including the exact HTML that was sent."""
+    entry = get_email_log(log_id)
+    if entry is None:
+        raise HTTPException(404, "Entrée du journal introuvable.")
+    return entry
+

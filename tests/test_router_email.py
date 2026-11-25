@@ -218,3 +218,51 @@ def test_get_send_job_unknown_returns_404(client):
     response = client.get("/api/email/send/does-not-exist")
 
     assert response.status_code == 404
+
+
+def test_test_email_is_logged(client, monkeypatch):
+    _configure_smtp(client, monkeypatch)
+    client.post("/api/email/test", json={"to_email": "doc@example.com"})
+
+    body = client.get("/api/email/log").json()
+    assert body["total"] == 1
+    entry = body["items"][0]
+    assert entry["kind"] == "test" and entry["status"] == "envoye"
+    assert entry["recipient"] == "doc@example.com"
+    assert entry["subject"].startswith("[Test]")
+    assert entry["sent_by"]  # DEV_MODE user in tests
+
+    detail = client.get(f"/api/email/log/{entry['id']}").json()
+    assert "Jean" in detail["html_body"]
+
+
+def test_mass_send_is_logged_with_cert_and_author(client, monkeypatch, insert_cert_with_email, tmp_path):
+    pdf_path = tmp_path / "cert.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 fake")
+    insert_cert_with_email("cert-log", email="julien@example.com", pdf_path=str(pdf_path))
+    _configure_smtp(client, monkeypatch)
+
+    client.post("/api/email/send", json={"cert_ids": ["cert-log"], "only_unsent": False})
+
+    entry = client.get("/api/email/log", params={"kind": "masse"}).json()["items"][0]
+    assert entry["cert_id"] == "cert-log" and entry["event_name"] == "IndabaX Togo 2026"
+    assert entry["status"] == "envoye" and entry["sent_by"]
+
+
+def test_log_filters_export_and_404(client, monkeypatch):
+    from core.mailer import record_email
+
+    record_email("a@example.com", "Sujet é", "test", "envoye", event_name="Evt")
+    record_email("b@example.com", "Sujet", "masse", "echec", "Erreur SMTP : boom", event_name="Evt")
+
+    assert client.get("/api/email/log", params={"status": "echec"}).json()["total"] == 1
+    assert client.get("/api/email/log", params={"status": "nimporte"}).status_code == 422
+
+    csv_resp = client.get("/api/email/log/export.csv")
+    assert csv_resp.status_code == 200
+    assert "journal-emails.csv" in csv_resp.headers["content-disposition"]
+    text = csv_resp.content.decode("utf-8-sig")
+    assert text.splitlines()[0].startswith("sent_at;recipient;subject")
+    assert "b@example.com" in text and "Erreur SMTP : boom" in text and "Sujet é" in text
+
+    assert client.get("/api/email/log/999999").status_code == 404

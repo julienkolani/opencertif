@@ -435,6 +435,14 @@ La configuration SMTP se fait depuis l'UI (page **Emails**, onglet
 - Utilisez le bouton "Tester l'envoi" avant un envoi réel. Gmail plafonne
   à environ 500 emails/jour pour un compte gratuit.
 
+Chaque tentative d'envoi (unitaire, batch, envoi en masse, test), réussie
+ou non, est enregistrée dans la table `email_log` de `data/certificates.db` :
+date, destinataire, sujet, certificat, auteur, erreur éventuelle et HTML
+exact envoyé. On la consulte dans l'onglet **Journal des envois** de la
+page Emails (filtres, aperçu de l'email, export CSV). C'est le seul
+historique des envois : l'envoi SMTP ne dépose aucune copie dans le dossier
+« Envoyés » de la boîte expéditrice.
+
 ### 7. Sauvegardes
 
 Toutes les données persistantes vivent dans `data/` (bind-mount décrit

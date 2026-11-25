@@ -10,10 +10,11 @@ auth = require_roles(["certifs-admin"])
 
 page_title("Gestion des emails")
 
-tab_config, tab_send, tab_history = st.tabs([
+tab_config, tab_send, tab_history, tab_log = st.tabs([
     ":material/settings: Configuration SMTP",
     ":material/send: Envoyer",
     ":material/history: Historique",
+    ":material/receipt_long: Journal des envois",
 ])
 
 
@@ -300,3 +301,135 @@ with tab_history:
                 st.session_state["oc_email_hist_page"] = page + 1
                 st.rerun()
         card_end()
+
+
+# --- Onglet Journal des envois ---
+# Every send attempt recorded by the API (api/core/mailer.py, record_email):
+# OpenCertif sends through SMTP, which keeps no copy in the sender's mailbox.
+_KIND_LABELS = {"": "Tous", "unitaire": "Unitaire", "batch": "Batch", "masse": "Envoi en masse", "test": "Test"}
+_STATUS_LABELS = {"": "Tous", "envoye": "Envoyé", "echec": "Échec"}
+
+with tab_log:
+    card_start("Filtres")
+    col_rcpt, col_evt, col_status, col_kind = st.columns([2, 2, 1, 1])
+    log_recipient = col_rcpt.text_input("Destinataire", key="email_log_recipient")
+    log_event = col_evt.text_input("Événement", key="email_log_event")
+    log_status = col_status.selectbox(
+        "Statut", list(_STATUS_LABELS), format_func=_STATUS_LABELS.get, key="email_log_status"
+    )
+    log_kind = col_kind.selectbox(
+        "Type", list(_KIND_LABELS), format_func=_KIND_LABELS.get, key="email_log_kind"
+    )
+    card_end()
+
+    log_filters = {
+        key: value
+        for key, value in {
+            "recipient": log_recipient.strip(),
+            "event_name": log_event.strip(),
+            "status": log_status,
+            "kind": log_kind,
+        }.items()
+        if value
+    }
+    log_filters_key = tuple(sorted(log_filters.items()))
+    if st.session_state.get("oc_email_log_filters_key") != log_filters_key:
+        st.session_state["oc_email_log_filters_key"] = log_filters_key
+        st.session_state["oc_email_log_page"] = 1
+
+    log_page = st.session_state.get("oc_email_log_page", 1)
+    log_page_size = 50
+
+    try:
+        log_body = api_request(
+            "GET", "/api/email/log", token=auth["token"],
+            params={**log_filters, "page": log_page, "page_size": log_page_size},
+        ).json()
+    except ApiError as exc:
+        log_body = {"items": [], "total": 0}
+        st.markdown(badge("error", f"Impossible de charger le journal : {exc.message}"), unsafe_allow_html=True)
+
+    log_items = log_body["items"]
+    log_total = log_body["total"]
+    log_total_pages = max(1, (log_total + log_page_size - 1) // log_page_size)
+
+    card_start()
+    if not log_items:
+        st.markdown('<p class="oc-table-empty">Aucun envoi enregistré.</p>', unsafe_allow_html=True)
+        selected_log = None
+    else:
+        rows = [
+            {
+                "Date (UTC)": (item["sent_at"] or "")[:19].replace("T", " "),
+                "Destinataire": item["recipient"],
+                "Sujet": item["subject"] or "",
+                "Type": _KIND_LABELS.get(item["kind"], item["kind"]),
+                "Statut": _STATUS_LABELS.get(item["status"], item["status"]),
+                "Erreur": item["error"] or "",
+                "Envoyé par": item["sent_by"] or "",
+            }
+            for item in log_items
+        ]
+        st.caption("Cliquez sur une ligne pour afficher l'email envoyé.")
+        event = st.dataframe(
+            rows, hide_index=True, width="stretch",
+            on_select="rerun", selection_mode="single-row", key="email_log_table",
+        )
+        selected_rows = event.selection.rows if event else []
+        selected_log = log_items[selected_rows[0]] if selected_rows else None
+
+        try:
+            csv_bytes = api_request(
+                "GET", "/api/email/log/export.csv", token=auth["token"], params=log_filters
+            ).content
+            st.download_button(
+                "Exporter en CSV (filtres appliqués)", csv_bytes,
+                file_name="journal-emails.csv", mime="text/csv", icon=":material/download:",
+            )
+        except ApiError as exc:
+            st.markdown(badge("error", f"Export indisponible : {exc.message}"), unsafe_allow_html=True)
+    card_end()
+
+    if log_items and log_total_pages > 1:
+        card_start()
+        col_prev, col_label, col_next = st.columns([1, 3, 1])
+        with col_prev:
+            if st.button("Précédent", key="oc-email-log-ghost-prev", disabled=log_page <= 1, width="stretch"):
+                st.session_state["oc_email_log_page"] = log_page - 1
+                st.rerun()
+        with col_label:
+            st.markdown(
+                f'<p style="text-align:center; color:var(--oc-text-secondary); margin:8px 0;">'
+                f"Page {log_page} / {log_total_pages} · {log_total} envoi(s)</p>",
+                unsafe_allow_html=True,
+            )
+        with col_next:
+            if st.button("Suivant", key="oc-email-log-ghost-next", disabled=log_page >= log_total_pages, width="stretch"):
+                st.session_state["oc_email_log_page"] = log_page + 1
+                st.rerun()
+        card_end()
+
+    if selected_log:
+        card_start("Détail de l'envoi")
+        try:
+            detail = api_request("GET", f"/api/email/log/{selected_log['id']}", token=auth["token"]).json()
+        except ApiError as exc:
+            detail = None
+            st.markdown(badge("error", f"Impossible de charger l'envoi : {exc.message}"), unsafe_allow_html=True)
+        if detail:
+            st.write(f"**Destinataire :** {detail['recipient']}")
+            st.write(f"**Sujet :** {detail['subject'] or ''}")
+            st.write(
+                f"**Statut :** {_STATUS_LABELS.get(detail['status'], detail['status'])}"
+                f" · **Type :** {_KIND_LABELS.get(detail['kind'], detail['kind'])}"
+                f" · **Par :** {detail['sent_by'] or '-'}"
+            )
+            if detail.get("cert_id"):
+                st.write(f"**Certificat :** `{detail['cert_id']}` ({detail.get('event_name') or ''})")
+            if detail.get("error"):
+                st.markdown(badge("error", "Échec de l'envoi"), unsafe_allow_html=True)
+                st.code(detail["error"], language=None)
+            if detail.get("html_body"):
+                components.html(detail["html_body"], height=500, scrolling=True)
+        card_end()
+

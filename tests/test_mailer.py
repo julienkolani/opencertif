@@ -252,3 +252,75 @@ def test_render_template_escapes_values_but_not_subject():
     assert mailer.render_template("{prenom} {nom}", values) == "&lt;b&gt;Jo&lt;/b&gt; O&#x27;Neil &amp; Co"
     assert mailer.render_template("Votre certificat : {evenement}", values, escape_html=False) == "Votre certificat : A & B"
     assert mailer.render_template("{inconnu} {{x}}", values) == "{inconnu} {{x}}"
+
+
+def _send(sample_pdf, **kwargs):
+    return mailer.send_certificate_email(
+        to_email="julien@example.com", name="Kolani", first_name="Julien",
+        event_name="IndabaX Togo 2026", event_date="2026-03-15",
+        pdf_path=sample_pdf, verify_url="https://certifs.example.com/verifier?code=abc",
+        **kwargs,
+    )
+
+
+def test_successful_send_is_logged_with_html(monkeypatch, settings, sample_pdf):
+    monkeypatch.setattr(mailer.smtplib, "SMTP", _FakeSMTP)
+
+    assert _send(sample_pdf, cert_id="c1", kind="batch", sent_by="oc-admin") is True
+
+    items, total = db.list_email_log()
+    assert total == 1
+    entry = db.get_email_log(items[0]["id"])
+    assert entry["recipient"] == "julien@example.com"
+    assert entry["status"] == "envoye" and entry["error"] is None
+    assert entry["kind"] == "batch" and entry["sent_by"] == "oc-admin"
+    assert entry["cert_id"] == "c1" and entry["event_name"] == "IndabaX Togo 2026"
+    assert "IndabaX Togo 2026" in entry["subject"]
+    assert "Julien" in entry["html_body"]
+    assert "html_body" not in items[0]  # list view stays light
+
+
+def test_smtp_failure_is_logged_with_error(monkeypatch, settings, sample_pdf):
+    monkeypatch.setattr(mailer.smtplib, "SMTP", _FailingSMTP)
+
+    assert _send(sample_pdf) is False
+
+    entry = db.list_email_log()[0][0]
+    assert entry["status"] == "echec"
+    assert "boom" in entry["error"]
+
+
+def test_missing_pdf_and_missing_smtp_are_logged(monkeypatch, settings, tmp_path, sample_pdf):
+    monkeypatch.setattr(mailer.smtplib, "SMTP", _FakeSMTP)
+    assert _send(str(tmp_path / "absent.pdf")) is False
+    monkeypatch.delenv("SMTP_HOST")
+    assert _send(sample_pdf) is False
+
+    errors = [e["error"] for e in db.list_email_log(status="echec")[0]]
+    assert any("SMTP non configuré" in e for e in errors)
+    assert any("PDF illisible" in e for e in errors)
+
+
+def test_log_write_failure_does_not_break_sending(monkeypatch, settings, sample_pdf):
+    monkeypatch.setattr(mailer.smtplib, "SMTP", _FakeSMTP)
+
+    def broken(_entry):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(mailer, "insert_email_log", broken)
+    assert _send(sample_pdf) is True
+
+
+def test_list_email_log_filters_and_paginates(settings):
+    for i in range(5):
+        mailer.record_email(f"user{i}@example.com", "S", "masse" if i % 2 else "test",
+                            "echec" if i == 4 else "envoye", event_name="Evt A" if i < 3 else "Evt B")
+
+    assert db.list_email_log()[1] == 5
+    assert db.list_email_log()[0][0]["recipient"] == "user4@example.com"  # newest first
+    assert db.list_email_log(status="echec")[1] == 1
+    assert db.list_email_log(kind="masse")[1] == 2
+    assert db.list_email_log(event_name="evt b")[1] == 2  # LIKE is case-insensitive
+    assert db.list_email_log(recipient="user1")[1] == 1
+    page2, total = db.list_email_log(limit=2, offset=2)
+    assert total == 5 and [e["recipient"] for e in page2] == ["user2@example.com", "user1@example.com"]

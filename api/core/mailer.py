@@ -3,13 +3,14 @@ import logging
 import re
 import smtplib
 import ssl
+from datetime import datetime, timezone
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 
 from .crypto import decrypt_secret
-from .db import get_setting
+from .db import get_setting, insert_email_log
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +174,36 @@ def test_smtp_connection() -> tuple[bool, str]:
         return False, f"Échec de connexion : {exc}"
 
 
+def record_email(
+    recipient: str,
+    subject: str | None,
+    kind: str,
+    status: str,
+    error: str | None = None,
+    html_body: str | None = None,
+    cert_id: str | None = None,
+    event_name: str | None = None,
+    sent_by: str | None = None,
+) -> None:
+    """Adds a row to the email_log table. Never raises: failing to write the
+    journal must not turn a delivered email into an error for the caller."""
+    try:
+        insert_email_log({
+            "sent_at": datetime.now(timezone.utc).isoformat(),
+            "recipient": recipient,
+            "subject": subject,
+            "cert_id": cert_id,
+            "event_name": event_name,
+            "kind": kind,
+            "status": status,
+            "error": error,
+            "sent_by": sent_by,
+            "html_body": html_body,
+        })
+    except Exception:
+        logger.exception("Impossible d'écrire le journal d'envoi pour %s", recipient)
+
+
 def send_certificate_email(
     to_email: str,
     name: str,
@@ -181,13 +212,16 @@ def send_certificate_email(
     event_date: str,
     pdf_path: str,
     verify_url: str = "",
+    cert_id: str | None = None,
+    kind: str = "unitaire",
+    sent_by: str | None = None,
 ) -> bool:
-    """Envoie le certificat PDF par email. Retourne True si succès."""
-    params = _get_smtp_params()
-    if not params["host"] or not params["from_addr"]:
-        logger.warning("SMTP non configuré, email non envoyé.")
-        return False
+    """Envoie le certificat PDF par email. Retourne True si succès.
 
+    Every attempt, successful or not, is recorded in email_log (kind is
+    "unitaire", "batch" or "masse"; sent_by is the admin who triggered it).
+    """
+    params = _get_smtp_params()
     subject, html_body = build_email_content({
         "prenom": first_name,
         "nom": name,
@@ -195,6 +229,17 @@ def send_certificate_email(
         "date": event_date,
         "url_verification": verify_url,
     })
+
+    def log(status: str, error: str | None = None) -> None:
+        record_email(
+            to_email, subject, kind, status, error, html_body,
+            cert_id=cert_id, event_name=event_name, sent_by=sent_by,
+        )
+
+    if not params["host"] or not params["from_addr"]:
+        logger.warning("SMTP non configuré, email non envoyé.")
+        log("echec", "SMTP non configuré (hôte ou adresse expéditeur manquant).")
+        return False
 
     message = MIMEMultipart("mixed")
     message["Subject"] = subject
@@ -204,8 +249,9 @@ def send_certificate_email(
 
     try:
         pdf_bytes = Path(pdf_path).read_bytes()
-    except OSError:
+    except OSError as exc:
         logger.exception("Impossible de lire le PDF %s", pdf_path)
+        log("echec", f"PDF illisible : {exc}")
         return False
 
     attachment = MIMEApplication(pdf_bytes, _subtype="pdf")
@@ -215,7 +261,10 @@ def send_certificate_email(
     try:
         with _build_smtp_connection(params) as server:
             server.sendmail(params["from_addr"], [to_email], message.as_string())
-        return True
-    except (smtplib.SMTPException, OSError):
+    except (smtplib.SMTPException, OSError) as exc:
         logger.exception("Échec d'envoi à %s", to_email)
+        log("echec", f"Erreur SMTP : {exc}")
         return False
+
+    log("envoye")
+    return True

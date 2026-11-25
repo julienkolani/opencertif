@@ -29,6 +29,28 @@ CREATE TABLE IF NOT EXISTS settings (
 )
 """
 
+# One row per send attempt (success or failure), kept for later checks:
+# OpenCertif sends through SMTP, which never stores a copy in the sender's
+# mailbox, so this table is the only record of what was sent to whom.
+CREATE_TABLE_EMAIL_LOG_SQL = """
+CREATE TABLE IF NOT EXISTS email_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    sent_at     TEXT NOT NULL,
+    recipient   TEXT NOT NULL,
+    subject     TEXT,
+    cert_id     TEXT,
+    event_name  TEXT,
+    kind        TEXT NOT NULL,
+    status      TEXT NOT NULL,
+    error       TEXT,
+    sent_by     TEXT,
+    html_body   TEXT
+)
+"""
+
+EMAIL_LOG_KINDS = ("unitaire", "batch", "masse", "test")
+EMAIL_LOG_STATUSES = ("envoye", "echec")
+
 CREATE_INDEX_SQL = """
 CREATE UNIQUE INDEX IF NOT EXISTS idx_dedup
     ON certificates(name, first_name, event_name, event_date)
@@ -58,6 +80,8 @@ def init_db() -> None:
         conn.execute(CREATE_TABLE_SQL)
         conn.execute(CREATE_TABLE_SETTINGS_SQL)
         conn.execute(CREATE_INDEX_SQL)
+        conn.execute(CREATE_TABLE_EMAIL_LOG_SQL)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_email_log_sent_at ON email_log(sent_at)")
         
         # Migration : colonne email
         try:
@@ -238,3 +262,83 @@ def mark_email_sent(cert_id: str, sent_at: str) -> None:
             "UPDATE certificates SET email_sent_at = ? WHERE id = ?",
             (sent_at, cert_id),
         )
+
+
+_EMAIL_LOG_LIST_COLUMNS = (
+    "id, sent_at, recipient, subject, cert_id, event_name, kind, status, error, sent_by"
+)
+
+
+def insert_email_log(entry: dict[str, Any]) -> int:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO email_log (
+                sent_at, recipient, subject, cert_id, event_name,
+                kind, status, error, sent_by, html_body
+            ) VALUES (
+                :sent_at, :recipient, :subject, :cert_id, :event_name,
+                :kind, :status, :error, :sent_by, :html_body
+            )
+            """,
+            {
+                "sent_at": entry["sent_at"],
+                "recipient": entry["recipient"],
+                "subject": entry.get("subject"),
+                "cert_id": entry.get("cert_id"),
+                "event_name": entry.get("event_name"),
+                "kind": entry["kind"],
+                "status": entry["status"],
+                "error": entry.get("error"),
+                "sent_by": entry.get("sent_by"),
+                "html_body": entry.get("html_body"),
+            },
+        )
+        return int(cursor.lastrowid)
+
+
+def _email_log_where(
+    recipient: str | None, event_name: str | None, status: str | None, kind: str | None
+) -> tuple[str, list[Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if recipient:
+        clauses.append("recipient LIKE ?")
+        params.append(f"%{recipient}%")
+    if event_name:
+        clauses.append("event_name LIKE ?")
+        params.append(f"%{event_name}%")
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    if kind:
+        clauses.append("kind = ?")
+        params.append(kind)
+    return (f"WHERE {' AND '.join(clauses)}" if clauses else ""), params
+
+
+def list_email_log(
+    recipient: str | None = None,
+    event_name: str | None = None,
+    status: str | None = None,
+    kind: str | None = None,
+    limit: int | None = 50,
+    offset: int = 0,
+) -> tuple[list[dict[str, Any]], int]:
+    """Newest first, without the HTML body (see get_email_log). limit=None
+    returns every matching row (CSV export)."""
+    where_sql, params = _email_log_where(recipient, event_name, status, kind)
+    with get_connection() as conn:
+        total = conn.execute(f"SELECT COUNT(*) FROM email_log {where_sql}", params).fetchone()[0]
+        sql = f"SELECT {_EMAIL_LOG_LIST_COLUMNS} FROM email_log {where_sql} ORDER BY id DESC"
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params = [*params, limit, offset]
+        rows = conn.execute(sql, params).fetchall()
+        return [dict(row) for row in rows], int(total)
+
+
+def get_email_log(log_id: int) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM email_log WHERE id = ?", (log_id,)).fetchone()
+        return dict(row) if row else None
