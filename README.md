@@ -654,12 +654,12 @@ opencertif/
 Rien n'est déployé automatiquement : le serveur récupère les images avec
 `docker compose pull` (voir « Mises à jour ultérieures »).
 
-Les paquets GHCR sont **privés** à leur création, même pour un dépôt
-public. Pour que le serveur puisse les télécharger sans identifiants,
-rendez-les publics une fois : GitHub → profil → *Packages* →
-`opencertif-api` (puis `opencertif-front`) → *Package settings* →
-*Change visibility* → *Public*. Sinon, connectez le serveur avec
-`docker login ghcr.io` et un token ayant le droit `read:packages`.
+Publiées depuis ce dépôt public par GitHub Actions, les images héritent
+de sa visibilité : elles sont publiques et se téléchargent sans
+identifiants. Sur un fork privé, elles seraient privées : rendez-les
+publiques (GitHub → *Packages* → le paquet → *Package settings* →
+*Change visibility*) ou connectez le serveur avec `docker login ghcr.io`
+et un token ayant le droit `read:packages`.
 
 ## Développement / tests
 
